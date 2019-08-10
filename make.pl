@@ -62,6 +62,15 @@ sub dispatch {
     }
 }
 
+sub await {
+    my $procs = shift;
+    my $pid;
+    delete $procs->{$pid}
+        while ($pid = wait) >= 0;
+
+    !%$procs;
+}
+
 target '--help' => sub {
     say <<'DONE';
 TODO
@@ -96,7 +105,7 @@ target update => sub {
         $procs{$pid} = 1;
     };
 
-    delete $procs{(wait)} while %procs;
+    await \%procs or die;
 };
 
 gen 'moar/src/gen/config.h', 'moar/build/config.h.in', sub {
