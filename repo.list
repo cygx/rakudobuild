@@ -1,9 +1,0 @@
-moar                    https://github.com/MoarVM/MoarVM.git
-nqp                     https://github.com/perl6/nqp.git
-rakudo                  https://github.com/rakudo/rakudo.git
-3rdparty/libuv          https://github.com/libuv/libuv.git
-3rdparty/dyncall        https://github.com/MoarVM/dyncall.git
-3rdparty/dynasm         https://github.com/MoarVM/dynasm.git
-3rdparty/libtommath     https://github.com/MoarVM/libtommath
-3rdparty/cmp            https://github.com/MoarVM/cmp.git
-3rdparty/libatomicops   https://github.com/MoarVM/libatomic_ops.git
