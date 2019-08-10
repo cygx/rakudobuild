@@ -6,12 +6,14 @@ my %rules;
 
 sub spurt {
     my ($name, $contents) = @_;
+    say 'SYNC spurt ', $name;
     open my $fh, '>', $name or die $!;
     syswrite $fh, $contents or die $!;
     close $fh;
 }
 
 sub spawn {
+    say join ' ', 'ASYNC', @_;
     if ($^O eq 'MSWin32') {
         system 1, @_;
     }
@@ -25,7 +27,7 @@ sub spawn {
 
 sub run {
     my ($cmd, @args) = @_;
-    say join ' ', @_;
+    say join ' ', 'SYNC', @_;
     system($cmd, @args) == 0
         or die "`$cmd´ returned $?";
 }
@@ -91,7 +93,7 @@ https://github.com/MoarVM/cmp.git               3rdparty/cmp
 DONE
 };
 
-target update => sub {
+target pull => sub {
     my %procs;
 
     for_repos sub {
