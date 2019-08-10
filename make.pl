@@ -1,19 +1,73 @@
-use v5.12;
+use v5.14;
 use warnings;
+
+my %config;
+{
+    open my $fh, 'build.conf'
+        or die $!;
+
+    while (<$fh>) {
+        s/^\s+|\s+$//g;
+        next unless length;
+
+        my ($key, $value) = split /\s+/, $_, 2;
+        if ($key =~ s/\[\]$//) {
+            push @{$config{$key}}, $value;
+        }
+        else {
+            $config{$key} = $value;
+        }
+    }
+
+    close $fh;
+}
+
+my @repos;
+{
+    my $i = 0;
+    my $reps = $config{'git.repos'};
+    while ($i < @$reps) {
+        my $dir = $reps->[$i++];
+        my $url = $reps->[$i++];
+        push @repos, [ $dir, $url ];
+    }
+}
 
 my %targets;
 my %rules;
+my %help;
+my @help;
+
+sub conflist {
+    my @list;
+    for (@config{@_}) {
+        push @list, ref($_) eq 'ARRAY' ? @$_ : $_;
+    }
+    @list;
+}
+
+sub confflag {
+    !!$config{(shift)}
+}
+
+sub confval {
+    $config{(shift)};
+}
+
+sub mtime {
+    (stat shift)[9];
+}
 
 sub spurt {
     my ($name, $contents) = @_;
-    say 'SYNC spurt ', $name;
+    say '[SYNC] spurt ', $name;
     open my $fh, '>', $name or die $!;
     syswrite $fh, $contents or die $!;
     close $fh;
 }
 
 sub spawn {
-    say join ' ', 'ASYNC', @_;
+    say join ' ', '[ASYNC]', @_;
     if ($^O eq 'MSWin32') {
         system 1, @_;
     }
@@ -27,22 +81,15 @@ sub spawn {
 
 sub run {
     my ($cmd, @args) = @_;
-    say join ' ', 'SYNC', @_;
+    say join ' ', '[SYNC]', @_;
     system($cmd, @args) == 0
         or die "`$cmd´ returned $?";
 }
 
 sub for_repos {
-    open my $fh, 'repo.list'
-        or die $!;
-
-    while (<$fh>) {
-        chomp;
-        my ($url, $dir) = split /\s+/, $_, 2;
-        $_->($dir, $url) for @_;
+    for my $repo (@repos) {
+        $_->(@$repo) for @_;
     }
-
-    close $fh;
 }
 
 sub gen {
@@ -73,41 +120,72 @@ sub await {
     !%$procs;
 }
 
-target '--help' => sub {
-    say <<'DONE';
-TODO
-DONE
-};
+sub help {
+    my ($key, $value) = @_;
+    push @help, $key;
+    $help{$key} = $value;
+}
 
-target init => sub {
-    spurt 'repo.list', <<'DONE' unless -f 'repo.list';
-https://github.com/MoarVM/MoarVM.git            moar
-https://github.com/perl6/nqp.git                nqp
-https://github.com/rakudo/rakudo.git            rakudo
-https://github.com/MoarVM/libatomic_ops.git     3rdparty/libatomicops
-https://github.com/libuv/libuv.git              3rdparty/libuv
-https://github.com/MoarVM/dyncall.git           3rdparty/dyncall
-https://github.com/MoarVM/dynasm.git            3rdparty/dynasm
-https://github.com/MoarVM/libtommath            3rdparty/libtommath
-https://github.com/MoarVM/cmp.git               3rdparty/cmp
-DONE
+help pull
+    => "update git repositories that exist and create those that don't";
+
+help 'build-libuv'
+    => "create static libuv library";
+
+target '--help' => sub {
+    say "\n  Abandon all hope, ye who enter here.\n\nTARGETS\n";
+    say "  $_\n    ", ($help{$_} // ''), "\n"
+        for @help;
 };
 
 target pull => sub {
     my %procs;
 
+    my @jflag = $config{'git.jflag'} // ();
     for_repos sub {
         my ($dir, $url) = @_;
 
         my $pid = spawn -e $dir
-            ? ('git', '-C', $dir, 'pull', '--depth=1')
-            : ('git',  'clone', '--depth=1', $url, $dir);
+            ? ('git', '-C', $dir, 'pull', '--depth=1', 
+                '--recurse-submodules', @jflag)
+            : ('git', 'clone', '--depth=1',
+                '--recurse-submodules', @jflag, $url, $dir);
 
         die $! if $pid <= 0;
         $procs{$pid} = 1;
     };
 
     await \%procs or die;
+};
+
+target 'build-libuv' => sub {
+    my $root = confval('moar.root') . '/3rdparty/libuv';
+
+    my @sources;
+    for (conflist 'moar.3rdparty.libuv.src') {
+        push @sources, glob "$root/src/$_";
+    }
+
+    my @cmd = (
+        conflist(qw(build.cc build.cc.flags.compile)),
+        confval('build.cc.flags.include'), "$root/include",
+        confval('build.cc.flags.include'), "$root/src",
+        confflag('build.debug')
+            ? conflist('build.cc.flags.debug')
+            : conflist('build.cc.flags.nodebug'),
+        confval('build.cc.flags.out')
+    );
+
+    my $compiled = 0;
+    for my $src (@sources) {
+        my $sfx = $config{'build.suffix.obj'};
+        my $dest = $src =~ s/\.c$/$sfx/r;
+
+        if (!-f $dest || mtime($dest) < mtime($src)) {
+            run @cmd, $dest, $src;
+            $compiled = 1;
+        }
+    }
 };
 
 gen 'moar/src/gen/config.h', 'moar/build/config.h.in', sub {
