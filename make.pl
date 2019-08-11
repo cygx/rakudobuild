@@ -4,6 +4,7 @@ use warnings;
 my $MTIME = mtime('build.conf');
 
 our $fh;
+our $dh;
 
 sub with_file {
     my ($file, $sub) = @_;
@@ -19,7 +20,24 @@ sub each_line {
             local $_ = $_;
             $sub->();
         }
-    }
+    };
+}
+
+my sub with_dir {
+    my ($dir, $sub) = @_;
+    opendir local $dh, $dir or die "$dir: $!";
+    $sub->();
+    close $dh;
+}
+
+my sub each_file {
+    my ($sub) = @_;
+    sub {
+        while (readdir $dh) {
+            local $_ = $_;
+            $sub->();
+        }
+    };
 }
 
 my %config;
@@ -451,10 +469,23 @@ package oo {
 }
 
 package Builder {
-    BEGIN { oo::slots qw(name includes build) }
+    BEGIN { oo::slots qw(name include build) }
 
     my sub toggle {
         map { /^no-/ ? s/^no-//r : "no-$_"; } @_;
+    }
+
+    sub dirwalk {
+        my ($dir, $sub) = @_;
+        with_dir $dir, each_file sub {
+            return if /^\./;
+            my $file = "$dir/$_";
+            if (-f $file) {
+                local $_ = $file;
+                $sub->();
+            }
+            elsif (-d $file) { dirwalk($file, $sub) }
+        };
     }
 
     sub new {
@@ -474,7 +505,7 @@ package Builder {
         bless {
             name => $name,
             build => [ sort keys %current ],
-            includes => [ includes $node ],
+            include => [ includes $node ],
         };
     }
 
@@ -484,10 +515,14 @@ package Builder {
     }
 
     sub headers {
-        my $self = shift;
-
-        # TODO
+        my @headers;
+        for (@{shift->include}) {
+            dirwalk $_, sub {
+                push @headers, $_ if /\.h$/;
+            };
+        }
+        @headers;
     }
 }
 
-say Builder->new('libuv', 'moar.3rdparty.libuv')->id;
+say for Builder->new('libuv', 'moar.3rdparty.libuv')->headers;
