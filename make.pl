@@ -90,6 +90,15 @@ sub spurt {
     close $fh;
 }
 
+sub run {
+    my ($cmd, @args) = @_;
+    note @_;
+    return 1 if $dryrun;
+
+    system($cmd, @args) == 0
+        or die "`$cmd´ returned $?";
+}
+
 sub spawn {
     local $async = 1;
     note @_;
@@ -103,40 +112,6 @@ sub spawn {
         return $pid if $pid;
         exec @_;
         die $!;
-    }
-}
-
-sub run {
-    my ($cmd, @args) = @_;
-    note @_;
-    return 1 if $dryrun;
-
-    system($cmd, @args) == 0
-        or die "`$cmd´ returned $?";
-}
-
-sub for_repos {
-    for my $repo (@repos) {
-        $_->(@$repo) for @_;
-    }
-}
-
-sub gen {
-    my ($dest, $src, @actions) = @_;
-    $rules{$dest} = [ [$src], [@actions] ];
-}
-
-sub target {
-    my ($name, $action) = @_;
-    $targets{$name} = $action;
-}
-
-sub dispatch {
-    for (@_) {
-        die "unknown target `$_´"
-            unless exists $targets{$_};
-
-        $targets{$_}->();
     }
 }
 
@@ -172,6 +147,60 @@ sub await {
     }
 
     $ok;
+}
+
+my @batch;
+
+sub done_batching {
+    my %procs;
+    my %cmds;
+
+    for (@batch) {
+        my $pid = spawn @$_;
+        die $! unless $pid > 0;
+        $procs{$pid} = undef;
+        $cmds{$pid} = $_;
+    }
+
+    await \%procs or die;
+    @batch = ();
+}
+
+sub batch {
+    if ($batchsize < 2) {
+        run @_;
+        return;
+    }
+
+    push @batch, \@_;
+    return if @batch < $batchsize;
+
+    done_batching;
+}
+
+sub for_repos {
+    for my $repo (@repos) {
+        $_->(@$repo) for @_;
+    }
+}
+
+sub gen {
+    my ($dest, $src, @actions) = @_;
+    $rules{$dest} = [ [$src], [@actions] ];
+}
+
+sub target {
+    my ($name, $action) = @_;
+    $targets{$name} = $action;
+}
+
+sub dispatch {
+    for (@_) {
+        die "unknown target `$_´"
+            unless exists $targets{$_};
+
+        $targets{$_}->();
+    }
 }
 
 sub help {
@@ -237,10 +266,12 @@ target 'build-libuv' => sub {
         my $dest = $src =~ s/\.c$/$sfx/r;
 
         if (!-f $dest || mtime($dest) < mtime($src)) {
-            run @cmd, $dest, $src;
+            batch @cmd, $dest, $src;
             $compiled = 1;
         }
     }
+
+    done_batching;
 };
 
 target 'clean-libuv' => sub {
