@@ -346,10 +346,10 @@ sub sources {
 }
 
 sub objects {
-    my ($node, $out, @sources) = @_;
+    my ($node, $prefix, @sources) = @_;
     my $root = conf("$node.root");
     my $base = "$root/".conf("$node.src.base");
-    map { s/^$base/$out/r }
+    map { s/^$base/$prefix/r }
         reext '.c', conf('build.suffix.obj'), @sources;
 }
 
@@ -527,6 +527,13 @@ package Builder {
     sub includes { ::includes shift->{node} }
     sub headers { ::headers shift->{node} }
     sub sources { ::sources shift->{node} }
+
+    sub objects {
+        my ($self, $prefix) = @_;
+        my $node = $self->{node};
+        my $id = $self->id;
+        ::objects $node, "$prefix$id", ::sources $node;
+    }
 }
 
-say for Builder->new('libuv', 'moar.3rdparty.libuv')->sources;
+say for Builder->new('libuv', 'moar.3rdparty.libuv')->objects('build.');
