@@ -1,14 +1,32 @@
 use v5.14;
 use warnings;
 
-my %config;
-{
-    open my $fh, 'build.conf'
-        or die $!;
+my $MTIME = mtime('build.conf');
 
+our $fh;
+
+sub with_file {
+    my ($file, $sub) = @_;
+    open local $fh, $file or die "$file: $!";
+    $sub->();
+    close $fh;
+}
+
+sub each_line {
+    my ($sub) = @_;
+    sub {
+        while (<$fh>) {
+            local $_ = $_;
+            $sub->();
+        }
+    }
+}
+
+my %config;
+with_file 'build.conf', sub {
     while (<$fh>) {
         s/^\s+|\s+$//g;
-        next unless length;
+        next if length == 0 || /^#/;
 
         my ($key, $value) = split /\s+/, $_, 2;
         if ($key =~ s/\[\]$//) {
@@ -18,24 +36,69 @@ my %config;
             $config{$key} = $value;
         }
     }
+};
 
-    close $fh;
+my %moarconfig = (
+    be  => confflag('arch.endian.big'),
+    static_inline => conf('lang.c.specifier.static_inline'),
+    version => conf('moar.version'),
+    versionmajor => conf('moar.version.major'),
+    versionminor => conf('moar.version.minor'),
+    versionpatch => conf('moar.version.patch'),
+    noreturnspecifier => confopt('lang.c.specifier.noreturn'),
+    noreturnattribute => confopt('lanc.c.attribute.noreturn'),
+    formatattribute => confopt('lang.c.attribute.format'),
+    dllimport => confopt('lang.c.specifier.dll.import'),
+    dllexport => confopt('lang.c.specifier.dll.export'),
+    dlllocal => confopt('lang.c.attribute.dll.local'),
+    has_pthread_yield => confflag('lib.c.pthread.yield'),
+    has_fn_malloc_trim => confflag('lib.c.std.malloc_trim'),
+    can_unaligned_int32 => confflag('lang.c.feature.unaligned.i32'),
+    can_unaligned_int64 => confflag('lang.c.feature.unaligned.i64'),
+    can_unaligned_num32 => confflag('lang.c.feature.unaligned.f32'),
+    can_unaligned_num64 => confflag('lang.c.feature.unaligned.f64'),
+    ptr_size => conf_u('arch.pointer.size'),
+    havebooltype => confflag('lang.c.feature.bool'),
+    booltype => conf('lang.c.type.bool'),
+    translate_newline_output => confflag('os.io.translate_newlines'),
+    jit_arch => conf('moar.jit.arch'),
+    jit_platform => conf('moar.jit.platform'),
+    vectorizerspecifier => confopt('lang.c.pragma.vectorize_loop'),
+    expect_likely => confopt('lang.c.builtin.expect.likely'),
+    expect_unlikely => confopt('lang.c.builtin.expect.unlikely'),
+    expect_condition => confopt('lang.c.builtin.expect'),
+    backendconfig => '/* FIXME */',
+);
+
+sub to_uint {
+    local $_ = shift;
+    die "`$_´ cannot be converted to uint" if /\D/;
+    0 + $_;
 }
 
-sub confval  { $config{(shift)} }
-sub confflag { $config{(shift)} ? 1 : 0 }
-sub confnum  { $config{(shift)} + 0 }
+sub conf {
+    my ($key) = @_;
+    $config{$key} // die "missing config key `$key´"
+}
+
+sub confopt  { $config{$_[0]} // '' }
+sub confflag { $config{$_[0]} ? 1 : 0 }
+
+sub conf_u    { to_uint &conf }
+sub confopt_u { to_uint &confopt }
+
 sub conflist {
     my @list;
     for (@config{@_}) {
-        push @list, ref($_) eq 'ARRAY' ? @$_ : $_;
+        push @list, ref($_) eq 'ARRAY' ? @$_ : $_
+            if defined;
     }
     @list;
 }
 
-our $quiet = 0;
+our $quiet = $ENV{QUIET} ? 1 : 0;
 our $async = 0;
-our $batchsize = confnum 'make.batch.size';
+our $batchsize = $ENV{SYNC} ? 0 : confopt_u 'make.async.degree';
 our $dryrun = $ENV{DRY_RUN} ? 1 : 0;
 
 my @repos;
@@ -50,25 +113,35 @@ my @repos;
 }
 
 my %targets;
-my %rules;
 my %help;
 my @help;
 
 sub note {
-    unshift @_, $dryrun ? () : $async ? '[ASYNC]' : '[SYNC]';
+    unshift @_, $dryrun || !$async ? () : '@aync';
     say join ' ', @_ unless $quiet;
+}
+
+sub min {
+    my $min = shift;
+    for (@_) { $min = $_ if $_ < $min }
+    $min;
 }
 
 sub mtime {
     (stat shift)[9];
 }
 
+sub needs_rebuild {
+    my ($dest, $mtime) = @_;
+    !-f $dest || mtime($dest) < $mtime;
+}
+
 sub files {
-    my ($root, @globs) = @_;
+    my ($base, @globs) = @_;
 
     my @files;
     for (@globs) {
-        push @files, glob("$root/$_");
+        push @files, glob("$base/$_");
     }
 
     @files;
@@ -81,12 +154,16 @@ sub reext {
 }
 
 sub spurt {
-    my ($name, $contents) = @_;
+    my $name = shift;
+
     note 'spurt', $name;
     return if $dryrun;
 
     open my $fh, '>', $name or die $!;
-    syswrite $fh, $contents or die $!;
+
+    syswrite $fh, $_ or die $!
+        for @_;
+
     close $fh;
 }
 
@@ -184,11 +261,6 @@ sub for_repos {
     }
 }
 
-sub gen {
-    my ($dest, $src, @actions) = @_;
-    $rules{$dest} = [ [$src], [@actions] ];
-}
-
 sub target {
     my ($name, $action) = @_;
     $targets{$name} = $action;
@@ -203,35 +275,134 @@ sub dispatch {
     }
 }
 
-sub help {
-    my ($key, $value) = @_;
-    push @help, $key;
-    $help{$key} = $value;
-}
-
-sub inc { map { confval('build.cc.flags.include') . $_ } @_ }
+sub inc { map { conf('build.cc.flags.include') . $_ } @_ }
 sub cc_co {
     conflist(qw(build.cc build.cc.flags.compile)),
     confflag('build.debug')
             ? conflist('build.cc.flags.debug')
             : conflist('build.cc.flags.nodebug'),
     @_,
-    confval('build.cc.flags.out');
+    conf('build.cc.flags.out');
 }
 
-help pull
-    => "update git repositories that exist and create those that don't";
+sub help {
+    my ($key, $value) = @_;
+    push @help, $key;
+    $help{$key} = $value;
+}
+
+sub sources {
+    my $node = shift;
+    my $root = conf("$node.root");
+    my $base = "$root/".conf("$node.src.base");
+    files $base, conflist("$node.src");
+}
+
+sub objects {
+    my ($node, $out, @sources) = @_;
+    my $root = conf("$node.root");
+    my $base = "$root/".conf("$node.src.base");
+    map { s/^$base/$out/r }
+        reext '.c', conf('build.suffix.obj'), @sources;
+}
+
+sub includes {
+    my $node = shift;
+    my $root = conf("$node.root");
+    map { "$root/$_" } conflist("$node.include");
+}
+
+sub mkparents {
+    my %dirs;
+    for (@_) {
+        local $_ = $_;
+        $dirs{$_} = undef while s/[\\\/][^\\\/]*$//;
+    }
+    mkdir for sort keys %dirs;
+}
+
+sub build {
+    my ($node, $id) = @_;
+    sub {
+        my @cmd = cc_co inc(includes $node);
+        my @sources = sources $node;
+        my @objects = objects $node, "build.$id", @sources;
+        mkparents @objects unless $dryrun;
+
+        my $compiled = 0;
+        for (my $i = 0; $i < @sources; ++$i) {
+            my $src = $sources[$i];
+            my $dest = $objects[$i];
+
+            if (needs_rebuild $dest) {
+                batch @cmd, $dest, $src;
+                $compiled = 1;
+            }
+        }
+
+        done_batching;
+    };
+}
+
+sub gen {
+    my ($dest, $src, $hash) = @_;
+
+    my @lines;
+    with_file $src, each_line sub {
+        while (/@(\w+)@/) {
+            my $key = $1;
+            die "unknown key `$key´"
+                unless exists $hash->{$key};
+
+            my $value = $hash->{$key};
+            s/@\Q$key\E@/$value/g;
+        }
+
+        push @lines, $_;
+    };
+
+    spurt $dest, @lines;
+}
+
+help 'pull'
+    => "update existing git repositories and create missing ones";
+
+help 'clobber'
+    => "git clean all repositories";
+
+help 'build'
+    => "build everything [DEFAULT]";
 
 help 'build-libuv'
-    => "create static libuv library";
+    => "build libuv as static library";
+
+help 'DRY_RUN'
+    => "merely log instead of execute commands";
+
+help 'QUIET'
+    => 'suppress logging output';
+
+help 'SYNC'
+    => "fully synchronous build";
 
 target '--help' => sub {
-    say "\n  Abandon all hope, ye who enter here.\n\nTARGETS\n";
+    say "\n  Abandon all hope, ye who enter here.";
+    say "\nTARGETS\n";
     say "  $_\n    ", ($help{$_} // ''), "\n"
-        for @help;
+        for grep { exists $targets{$_} } @help;
+    say "\nENVIRONMENT FLAGS\n";
+    say "  $_\n    ", ($help{$_} // ''), "\n"
+        for grep { /DRY_RUN|QUIET|SYNC/ } @help;
 };
 
-target pull => sub {
+target 'clobber' => sub {
+    for_repos sub {
+        my ($dir) = @_;
+        run 'git', '-C', $dir, 'clean', '-xdf';
+    };
+};
+
+target 'pull' => sub {
     my %procs;
 
     my @jflag = $config{'git.jflag'} // ();
@@ -251,39 +422,20 @@ target pull => sub {
     await \%procs or die;
 };
 
-sub libuv_root { confval('moar.root') . '/3rdparty/libuv' }
-sub libuv_sources { files libuv_root, conflist('moar.3rdparty.libuv.src') }
-sub libuv_objects { reext '.c', confval('build.suffix.obj'), libuv_sources }
-sub libuv_includes { libuv_root.'/include', libuv_root.'/src' }
+target 'build-libuv' => build 'moar.3rdparty.libuv', 'libuv-static';
 
-target 'build-libuv' => sub {
-    my @sources = libuv_sources;
-    my @cmd = cc_co inc(libuv_includes);
-
-    my $compiled = 0;
-    for my $src (@sources) {
-        my $sfx = $config{'build.suffix.obj'};
-        my $dest = $src =~ s/\.c$/$sfx/r;
-
-        if (!-f $dest || mtime($dest) < mtime($src)) {
-            batch @cmd, $dest, $src;
-            $compiled = 1;
-        }
-    }
-
-    done_batching;
+target 'build' => sub {
+    dispatch
+        confflag('moar.3rdparty.libuv.build') ? 'build-libuv' : ();
 };
 
-target 'clean-libuv' => sub {
-    for (grep { -f $_ } libuv_objects) {
-        note 'unlink', $_;
-        unlink $_ unless $dryrun;
+target 'moar-config' => sub {
+    for my $file (qw(config.h config.c)) {
+        my $src = conf('moar.root')."/build/$file.in";
+        my $dest = conf('moar.root')."/src/gen/$file";
+        gen $dest, $src, \%moarconfig
+            if needs_rebuild $dest, min mtime($src), $MTIME;
     }
 };
 
-gen 'moar/src/gen/config.h', 'moar/build/config.h.in', sub {
-    my ($dest, $src) = @_;
-
-};
-
-dispatch @ARGV ? @ARGV : qw(build);
+dispatch @ARGV ? @ARGV : 'build';
