@@ -1,9 +1,6 @@
 use v5.14;
 use warnings;
 
-our $quiet = 0;
-our $async = 0;
-
 my %config;
 {
     open my $fh, 'build.conf'
@@ -25,6 +22,21 @@ my %config;
     close $fh;
 }
 
+sub confval  {  $config{(shift)} }
+sub confflag {  $config{(shift)} ? 1 : 0 }
+sub confnum  { +$config{(shift)} }
+sub conflist {
+    my @list;
+    for (@config{@_}) {
+        push @list, ref($_) eq 'ARRAY' ? @$_ : $_;
+    }
+    @list;
+}
+
+our $quiet = 0;
+our $async = 0;
+our $batchsize = confnum 'make.batch.size';
+
 my @repos;
 {
     my $i = 0;
@@ -44,22 +56,6 @@ my @help;
 sub note {
     unshift @_, $async ? '[ASYNC]' : '[SYNC]';
     say join ' ', @_ unless $quiet;
-}
-
-sub conflist {
-    my @list;
-    for (@config{@_}) {
-        push @list, ref($_) eq 'ARRAY' ? @$_ : $_;
-    }
-    @list;
-}
-
-sub confflag {
-    !!$config{(shift)}
-}
-
-sub confval {
-    $config{(shift)};
 }
 
 sub mtime {
