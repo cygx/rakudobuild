@@ -1,6 +1,9 @@
 use v5.14;
 use warnings;
 
+our $quiet = 0;
+our $async = 0;
+
 my %config;
 {
     open my $fh, 'build.conf'
@@ -38,6 +41,11 @@ my %rules;
 my %help;
 my @help;
 
+sub note {
+    unshift @_, $async ? '[ASYNC]' : '[SYNC]';
+    say join ' ', @_ unless $quiet;
+}
+
 sub conflist {
     my @list;
     for (@config{@_}) {
@@ -60,14 +68,15 @@ sub mtime {
 
 sub spurt {
     my ($name, $contents) = @_;
-    say '[SYNC] spurt ', $name;
+    note 'spurt', $name;
     open my $fh, '>', $name or die $!;
     syswrite $fh, $contents or die $!;
     close $fh;
 }
 
 sub spawn {
-    say join ' ', '[ASYNC]', @_;
+    local $async = 1;
+    note @_;
     if ($^O eq 'MSWin32') {
         system 1, @_;
     }
@@ -81,7 +90,7 @@ sub spawn {
 
 sub run {
     my ($cmd, @args) = @_;
-    say join ' ', '[SYNC]', @_;
+    note @_;
     system($cmd, @args) == 0
         or die "`$cmd´ returned $?";
 }
