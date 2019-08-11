@@ -22,9 +22,9 @@ my %config;
     close $fh;
 }
 
-sub confval  {  $config{(shift)} }
-sub confflag {  $config{(shift)} ? 1 : 0 }
-sub confnum  { +$config{(shift)} }
+sub confval  { $config{(shift)} }
+sub confflag { $config{(shift)} ? 1 : 0 }
+sub confnum  { $config{(shift)} + 0 }
 sub conflist {
     my @list;
     for (@config{@_}) {
@@ -36,6 +36,7 @@ sub conflist {
 our $quiet = 0;
 our $async = 0;
 our $batchsize = confnum 'make.batch.size';
+our $dryrun = $ENV{DRY_RUN} ? 1 : 0;
 
 my @repos;
 {
@@ -54,7 +55,7 @@ my %help;
 my @help;
 
 sub note {
-    unshift @_, $async ? '[ASYNC]' : '[SYNC]';
+    unshift @_, $dryrun ? () : $async ? '[ASYNC]' : '[SYNC]';
     say join ' ', @_ unless $quiet;
 }
 
@@ -62,9 +63,28 @@ sub mtime {
     (stat shift)[9];
 }
 
+sub files {
+    my ($root, @globs) = @_;
+
+    my @files;
+    for (@globs) {
+        push @files, glob("$root/$_");
+    }
+
+    @files;
+}
+
+sub reext {
+    my ($old, $new, @names) = @_;
+    s/\Q$old\E$/$new/ for @names;
+    @names;
+}
+
 sub spurt {
     my ($name, $contents) = @_;
     note 'spurt', $name;
+    return if $dryrun;
+
     open my $fh, '>', $name or die $!;
     syswrite $fh, $contents or die $!;
     close $fh;
@@ -73,6 +93,8 @@ sub spurt {
 sub spawn {
     local $async = 1;
     note @_;
+    return 1 if $dryrun;
+
     if ($^O eq 'MSWin32') {
         system 1, @_;
     }
@@ -87,6 +109,8 @@ sub spawn {
 sub run {
     my ($cmd, @args) = @_;
     note @_;
+    return 1 if $dryrun;
+
     system($cmd, @args) == 0
         or die "`$cmd´ returned $?";
 }
@@ -117,6 +141,8 @@ sub dispatch {
 }
 
 sub await {
+    return 1 if $dryrun;
+
     my $procs = shift;
     my $ok = 1;
 
@@ -154,6 +180,16 @@ sub help {
     $help{$key} = $value;
 }
 
+sub inc { map { confval('build.cc.flags.include') . $_ } @_ }
+sub cc_co {
+    conflist(qw(build.cc build.cc.flags.compile)),
+    confflag('build.debug')
+            ? conflist('build.cc.flags.debug')
+            : conflist('build.cc.flags.nodebug'),
+    @_,
+    confval('build.cc.flags.out');
+}
+
 help pull
     => "update git repositories that exist and create those that don't";
 
@@ -174,7 +210,7 @@ target pull => sub {
         my ($dir, $url) = @_;
 
         my $pid = spawn -e $dir
-            ? ('git', '-C', $dir, 'pull', '--depth=1', 
+            ? ('git', '-C', $dir, 'pull', '--depth=1',
                 '--recurse-submodules', @jflag)
             : ('git', 'clone', '--depth=1',
                 '--recurse-submodules', @jflag, $url, $dir);
@@ -186,23 +222,14 @@ target pull => sub {
     await \%procs or die;
 };
 
+sub libuv_root { confval('moar.root') . '/3rdparty/libuv' }
+sub libuv_sources { files libuv_root, conflist('moar.3rdparty.libuv.src') }
+sub libuv_objects { reext '.c', confval('build.suffix.obj'), libuv_sources }
+sub libuv_includes { libuv_root.'/include', libuv_root.'/src' }
+
 target 'build-libuv' => sub {
-    my $root = confval('moar.root') . '/3rdparty/libuv';
-
-    my @sources;
-    for (conflist 'moar.3rdparty.libuv.src') {
-        push @sources, glob "$root/src/$_";
-    }
-
-    my @cmd = (
-        conflist(qw(build.cc build.cc.flags.compile)),
-        confval('build.cc.flags.include'), "$root/include",
-        confval('build.cc.flags.include'), "$root/src",
-        confflag('build.debug')
-            ? conflist('build.cc.flags.debug')
-            : conflist('build.cc.flags.nodebug'),
-        confval('build.cc.flags.out')
-    );
+    my @sources = libuv_sources;
+    my @cmd = cc_co inc(libuv_includes);
 
     my $compiled = 0;
     for my $src (@sources) {
@@ -213,6 +240,13 @@ target 'build-libuv' => sub {
             run @cmd, $dest, $src;
             $compiled = 1;
         }
+    }
+};
+
+target 'clean-libuv' => sub {
+    for (grep { -f $_ } libuv_objects) {
+        note 'unlink', $_;
+        unlink $_ unless $dryrun;
     }
 };
 
