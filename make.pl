@@ -23,6 +23,32 @@ sub each_line {
 }
 
 my %config;
+sub to_uint {
+    local $_ = shift;
+    die "`$_´ cannot be converted to uint" if /\D/;
+    0 + $_;
+}
+
+my sub conf {
+    my ($key) = @_;
+    $config{$key} // die "missing config key `$key´"
+}
+
+my sub confopt  { $config{$_[0]} // '' }
+my sub confflag { $config{$_[0]} ? 1 : 0 }
+
+my sub conf_u    { to_uint &conf }
+my sub confopt_u { to_uint &confopt }
+
+my sub conflist {
+    my @list;
+    for (@config{@_}) {
+        push @list, ref($_) eq 'ARRAY' ? @$_ : $_
+            if defined;
+    }
+    @list;
+}
+
 with_file 'build.conf', sub {
     while (<$fh>) {
         s/^\s+|\s+$//g;
@@ -69,32 +95,6 @@ my %moarconfig = (
     expect_condition => confopt('lang.c.builtin.expect'),
     backendconfig => '/* FIXME */',
 );
-
-sub to_uint {
-    local $_ = shift;
-    die "`$_´ cannot be converted to uint" if /\D/;
-    0 + $_;
-}
-
-sub conf {
-    my ($key) = @_;
-    $config{$key} // die "missing config key `$key´"
-}
-
-sub confopt  { $config{$_[0]} // '' }
-sub confflag { $config{$_[0]} ? 1 : 0 }
-
-sub conf_u    { to_uint &conf }
-sub confopt_u { to_uint &confopt }
-
-sub conflist {
-    my @list;
-    for (@config{@_}) {
-        push @list, ref($_) eq 'ARRAY' ? @$_ : $_
-            if defined;
-    }
-    @list;
-}
 
 our $quiet = $ENV{QUIET} ? 1 : 0;
 our $async = 0;
@@ -306,7 +306,7 @@ sub objects {
         reext '.c', conf('build.suffix.obj'), @sources;
 }
 
-sub includes {
+my sub includes {
     my $node = shift;
     my $root = conf("$node.root");
     map { "$root/$_" } conflist("$node.include");
@@ -438,4 +438,56 @@ target 'moar-config' => sub {
     }
 };
 
-dispatch @ARGV ? @ARGV : 'build';
+#dispatch @ARGV ? @ARGV : 'build';
+
+package oo {
+    sub slots {
+        no strict 'refs';
+        my $pkg = caller;
+        for my $slot (@_) {
+            *{"${pkg}::${slot}"} = sub : lvalue { shift->{$slot} };
+        }
+    }
+}
+
+package Builder {
+    BEGIN { oo::slots qw(name includes build) }
+
+    my sub toggle {
+        map { /^no-/ ? s/^no-//r : "no-$_"; } @_;
+    }
+
+    sub new {
+        my (undef, $name, $node, @flags) = @_;
+
+        my %builds;
+        @builds{conflist "$node.builds"} = ();
+        @builds{map { "no-$_" } keys %builds} = ();
+
+        my %current;
+        @current{conflist "$node.builds.default"} = ();
+
+        @flags = grep { exists $builds{$_} } @flags;
+        delete @current{toggle @flags};
+        @current{@flags} = ();
+
+        bless {
+            name => $name,
+            build => [ sort keys %current ],
+            includes => [ includes $node ],
+        };
+    }
+
+    sub id {
+        my $self = shift;
+        join '-', $self->name, grep { !/^no-/ } @{$self->build};
+    }
+
+    sub headers {
+        my $self = shift;
+
+        # TODO
+    }
+}
+
+say Builder->new('libuv', 'moar.3rdparty.libuv')->id;
