@@ -23,14 +23,14 @@ sub each_line {
     };
 }
 
-my sub with_dir {
+sub with_dir {
     my ($dir, $sub) = @_;
     opendir local $dh, $dir or die "$dir: $!";
     $sub->();
     close $dh;
 }
 
-my sub each_file {
+sub each_file {
     my ($sub) = @_;
     sub {
         while (readdir $dh) {
@@ -309,6 +309,35 @@ sub help {
     $help{$key} = $value;
 }
 
+sub dirwalk {
+    my ($dir, $sub) = @_;
+    with_dir $dir, each_file sub {
+        return if /^\./;
+        my $file = "$dir/$_";
+        if (-f $file) {
+            local $_ = $file;
+            $sub->();
+        }
+        elsif (-d $file) { dirwalk($file, $sub) }
+    };
+}
+
+sub includes {
+    my $node = shift;
+    my $root = conf("$node.root");
+    map { "$root/$_" } conflist("$node.include");
+}
+
+sub headers {
+    my @headers;
+    for (includes shift) {
+        dirwalk $_, sub {
+            push @headers, $_ if /\.h$/;
+        };
+    }
+    @headers;
+}
+
 sub sources {
     my $node = shift;
     my $root = conf("$node.root");
@@ -322,12 +351,6 @@ sub objects {
     my $base = "$root/".conf("$node.src.base");
     map { s/^$base/$out/r }
         reext '.c', conf('build.suffix.obj'), @sources;
-}
-
-my sub includes {
-    my $node = shift;
-    my $root = conf("$node.root");
-    map { "$root/$_" } conflist("$node.include");
 }
 
 sub mkparents {
@@ -459,7 +482,7 @@ target 'moar-config' => sub {
 #dispatch @ARGV ? @ARGV : 'build';
 
 package oo {
-    sub slots {
+    sub public {
         no strict 'refs';
         my $pkg = caller;
         for my $slot (@_) {
@@ -469,23 +492,10 @@ package oo {
 }
 
 package Builder {
-    BEGIN { oo::slots qw(name include build) }
+    BEGIN { oo::public qw(name build) }
 
     my sub toggle {
         map { /^no-/ ? s/^no-//r : "no-$_"; } @_;
-    }
-
-    sub dirwalk {
-        my ($dir, $sub) = @_;
-        with_dir $dir, each_file sub {
-            return if /^\./;
-            my $file = "$dir/$_";
-            if (-f $file) {
-                local $_ = $file;
-                $sub->();
-            }
-            elsif (-d $file) { dirwalk($file, $sub) }
-        };
     }
 
     sub new {
@@ -503,9 +513,9 @@ package Builder {
         @current{@flags} = ();
 
         bless {
+            node => $node,
             name => $name,
             build => [ sort keys %current ],
-            include => [ includes $node ],
         };
     }
 
@@ -514,15 +524,9 @@ package Builder {
         join '-', $self->name, grep { !/^no-/ } @{$self->build};
     }
 
-    sub headers {
-        my @headers;
-        for (@{shift->include}) {
-            dirwalk $_, sub {
-                push @headers, $_ if /\.h$/;
-            };
-        }
-        @headers;
-    }
+    sub includes { ::includes shift->{node} }
+    sub headers { ::headers shift->{node} }
+    sub sources { ::sources shift->{node} }
 }
 
-say for Builder->new('libuv', 'moar.3rdparty.libuv')->headers;
+say for Builder->new('libuv', 'moar.3rdparty.libuv')->sources;
