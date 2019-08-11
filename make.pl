@@ -113,11 +113,34 @@ sub dispatch {
 
 sub await {
     my $procs = shift;
-    my $pid;
-    delete $procs->{$pid}
-        while ($pid = wait) >= 0;
+    my $ok = 1;
 
-    !%$procs;
+    while ((my $pid = wait) >= 0) {
+
+        # expected proc
+        if (exists $procs->{$pid}) {
+            $procs->{$pid} = $?;
+            $ok = 0 if $? != 0;
+        }
+
+        # unexpected proc
+        else {
+            $procs->{(-$pid)} = $?;
+            $ok = 0;
+        }
+    }
+
+    # check all expected procs are done
+    if ($ok) {
+        for (values %$procs) {
+            unless (defined) {
+                $ok = 0;
+                last;
+            }
+        }
+    }
+
+    $ok;
 }
 
 sub help {
@@ -152,7 +175,7 @@ target pull => sub {
                 '--recurse-submodules', @jflag, $url, $dir);
 
         die $! if $pid <= 0;
-        $procs{$pid} = 1;
+        $procs{$pid} = undef;
     };
 
     await \%procs or die;
