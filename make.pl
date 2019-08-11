@@ -1,10 +1,147 @@
 use v5.14;
 use warnings;
 
-my $MTIME = mtime('build.conf');
+use subs qw(
+    conf confopt confflag conf_u confopt_u conflist
+    mtime min to_uint note files
+    with_file each_line with_dir each_file
+    enqueue batch run spawn
+);
+
+our $CONFFILE;
+our $MTIME;
+our %CONF;
+our %MOARCONF;
+our @REPOS;
 
 our $fh;
 our $dh;
+
+our $quiet;
+our $async;
+our $batchsize;
+our $dryrun;
+
+my %targets;
+my %help;
+my @help;
+my @queue;
+
+INIT {
+    $CONFFILE = 'build.conf';
+    $MTIME = mtime $CONFFILE;
+
+    with_file $CONFFILE, sub {
+        while (<$fh>) {
+            s/^\s+|\s+$//g;
+            next if length == 0 || /^#/;
+
+            my ($key, $value) = split /\s+/, $_, 2;
+            if ($key =~ s/\[\]$//) {
+                push @{$CONF{$key}}, $value;
+            }
+            else {
+                $CONF{$key} = $value;
+            }
+        }
+    };
+
+    %MOARCONF = (
+        be  => confflag('arch.endian.big'),
+        static_inline => conf('lang.c.specifier.static_inline'),
+        version => conf('moar.version'),
+        versionmajor => conf('moar.version.major'),
+        versionminor => conf('moar.version.minor'),
+        versionpatch => conf('moar.version.patch'),
+        noreturnspecifier => confopt('lang.c.specifier.noreturn'),
+        noreturnattribute => confopt('lanc.c.attribute.noreturn'),
+        formatattribute => confopt('lang.c.attribute.format'),
+        dllimport => confopt('lang.c.specifier.dll.import'),
+        dllexport => confopt('lang.c.specifier.dll.export'),
+        dlllocal => confopt('lang.c.attribute.dll.local'),
+        has_pthread_yield => confflag('lib.c.pthread.yield'),
+        has_fn_malloc_trim => confflag('lib.c.std.malloc_trim'),
+        can_unaligned_int32 => confflag('lang.c.feature.unaligned.i32'),
+        can_unaligned_int64 => confflag('lang.c.feature.unaligned.i64'),
+        can_unaligned_num32 => confflag('lang.c.feature.unaligned.f32'),
+        can_unaligned_num64 => confflag('lang.c.feature.unaligned.f64'),
+        ptr_size => conf_u('arch.pointer.size'),
+        havebooltype => confflag('lang.c.feature.bool'),
+        booltype => conf('lang.c.type.bool'),
+        translate_newline_output => confflag('os.io.translate_newlines'),
+        jit_arch => conf('moar.jit.arch'),
+        jit_platform => conf('moar.jit.platform'),
+        vectorizerspecifier => confopt('lang.c.pragma.vectorize_loop'),
+        expect_likely => confopt('lang.c.builtin.expect.likely'),
+        expect_unlikely => confopt('lang.c.builtin.expect.unlikely'),
+        expect_condition => confopt('lang.c.builtin.expect'),
+        backendconfig => '/* FIXME */',
+    );
+
+    {
+        my @repos = conflist('git.repos');
+        while (@repos) {
+            my $dir = shift @repos;
+            my $url = shift @repos;
+            push @REPOS, [ $dir, $url ];
+        }
+    }
+
+    $quiet = $ENV{QUIET} ? 1 : 0;
+    $async = 0;
+    $batchsize = $ENV{SYNC} ? 0 : confopt_u 'make.async.degree';
+    $dryrun = $ENV{DRY_RUN} ? 1 : 0;
+}
+
+sub conf {
+    my ($key) = @_;
+    $CONF{$key} // die "missing config key `$key´"
+}
+
+sub confopt  { $CONF{$_[0]} // '' }
+sub confflag { $CONF{$_[0]} ? 1 : 0 }
+
+sub conf_u    { to_uint &conf }
+sub confopt_u { to_uint &confopt }
+
+sub conflist {
+    my @list;
+    for (@CONF{@_}) {
+        push @list, ref($_) eq 'ARRAY' ? @$_ : $_
+            if defined;
+    }
+    @list;
+}
+
+sub mtime { (stat shift)[9] }
+
+sub min {
+    my $min = shift;
+    for (@_) { $min = $_ if $_ < $min }
+    $min;
+}
+
+sub to_uint {
+    local $_ = shift;
+    die "`$_´ cannot be converted to uint" if /\D/;
+    length ? 0 + $_ : 0;
+}
+
+sub note {
+    unshift @_, $dryrun || !$async ? () : '@aync';
+    say join ' ', @_ unless $quiet;
+}
+
+sub files {
+    my ($base, @globs) = @_;
+
+    my @files;
+    for (@globs) {
+        push @files, glob("$base/$_");
+    }
+
+    @files;
+}
 
 sub with_file {
     my ($file, $sub) = @_;
@@ -40,182 +177,17 @@ sub each_file {
     };
 }
 
-my %config;
-sub to_uint {
-    local $_ = shift;
-    die "`$_´ cannot be converted to uint" if /\D/;
-    0 + $_;
-}
-
-sub conf {
-    my ($key) = @_;
-    $config{$key} // die "missing config key `$key´"
-}
-
-sub confopt  { $config{$_[0]} // '' }
-sub confflag { $config{$_[0]} ? 1 : 0 }
-
-sub conf_u    { to_uint &conf }
-sub confopt_u { to_uint &confopt }
-
-sub conflist {
-    my @list;
-    for (@config{@_}) {
-        push @list, ref($_) eq 'ARRAY' ? @$_ : $_
-            if defined;
-    }
-    @list;
-}
-
-with_file 'build.conf', sub {
-    while (<$fh>) {
-        s/^\s+|\s+$//g;
-        next if length == 0 || /^#/;
-
-        my ($key, $value) = split /\s+/, $_, 2;
-        if ($key =~ s/\[\]$//) {
-            push @{$config{$key}}, $value;
-        }
-        else {
-            $config{$key} = $value;
-        }
-    }
-};
-
-my %moarconfig = (
-    be  => confflag('arch.endian.big'),
-    static_inline => conf('lang.c.specifier.static_inline'),
-    version => conf('moar.version'),
-    versionmajor => conf('moar.version.major'),
-    versionminor => conf('moar.version.minor'),
-    versionpatch => conf('moar.version.patch'),
-    noreturnspecifier => confopt('lang.c.specifier.noreturn'),
-    noreturnattribute => confopt('lanc.c.attribute.noreturn'),
-    formatattribute => confopt('lang.c.attribute.format'),
-    dllimport => confopt('lang.c.specifier.dll.import'),
-    dllexport => confopt('lang.c.specifier.dll.export'),
-    dlllocal => confopt('lang.c.attribute.dll.local'),
-    has_pthread_yield => confflag('lib.c.pthread.yield'),
-    has_fn_malloc_trim => confflag('lib.c.std.malloc_trim'),
-    can_unaligned_int32 => confflag('lang.c.feature.unaligned.i32'),
-    can_unaligned_int64 => confflag('lang.c.feature.unaligned.i64'),
-    can_unaligned_num32 => confflag('lang.c.feature.unaligned.f32'),
-    can_unaligned_num64 => confflag('lang.c.feature.unaligned.f64'),
-    ptr_size => conf_u('arch.pointer.size'),
-    havebooltype => confflag('lang.c.feature.bool'),
-    booltype => conf('lang.c.type.bool'),
-    translate_newline_output => confflag('os.io.translate_newlines'),
-    jit_arch => conf('moar.jit.arch'),
-    jit_platform => conf('moar.jit.platform'),
-    vectorizerspecifier => confopt('lang.c.pragma.vectorize_loop'),
-    expect_likely => confopt('lang.c.builtin.expect.likely'),
-    expect_unlikely => confopt('lang.c.builtin.expect.unlikely'),
-    expect_condition => confopt('lang.c.builtin.expect'),
-    backendconfig => '/* FIXME */',
-);
-
-our $quiet = $ENV{QUIET} ? 1 : 0;
-our $async = 0;
-our $batchsize = $ENV{SYNC} ? 0 : confopt_u 'make.async.degree';
-our $dryrun = $ENV{DRY_RUN} ? 1 : 0;
-
-my @repos;
-{
-    my $i = 0;
-    my $reps = $config{'git.repos'};
-    while ($i < @$reps) {
-        my $dir = $reps->[$i++];
-        my $url = $reps->[$i++];
-        push @repos, [ $dir, $url ];
+sub for_repos {
+    for my $repo (@REPOS) {
+        $_->(@$repo) for @_;
     }
 }
-
-my %targets;
-my %help;
-my @help;
-
-sub note {
-    unshift @_, $dryrun || !$async ? () : '@aync';
-    say join ' ', @_ unless $quiet;
-}
-
-sub min {
-    my $min = shift;
-    for (@_) { $min = $_ if $_ < $min }
-    $min;
-}
-
-sub mtime {
-    (stat shift)[9];
-}
-
-sub needs_rebuild {
-    my ($dest, $mtime) = @_;
-    !-f $dest || mtime($dest) < $mtime;
-}
-
-sub files {
-    my ($base, @globs) = @_;
-
-    my @files;
-    for (@globs) {
-        push @files, glob("$base/$_");
-    }
-
-    @files;
-}
-
-sub reext {
-    my ($old, $new, @names) = @_;
-    s/\Q$old\E$/$new/ for @names;
-    @names;
-}
-
-sub spurt {
-    my $name = shift;
-
-    note 'spurt', $name;
-    return if $dryrun;
-
-    open my $fh, '>', $name or die $!;
-
-    syswrite $fh, $_ or die $!
-        for @_;
-
-    close $fh;
-}
-
-sub run {
-    my ($cmd, @args) = @_;
-    note @_;
-    return 1 if $dryrun;
-
-    system($cmd, @args) == 0
-        or die "`$cmd´ returned $?";
-}
-
-sub spawn {
-    local $async = 1;
-    note @_;
-    return 1 if $dryrun;
-
-    if ($^O eq 'MSWin32') {
-        system 1, @_;
-    }
-    else {
-        my $pid = fork // return -1;
-        return $pid if $pid;
-        exec @_;
-        die $!;
-    }
-}
-
-my @queue;
 
 sub enqueue {
     push @queue, \@_;
 }
 
+# TODO: error handling!
 sub batch {
     return unless @queue;
 
@@ -253,10 +225,35 @@ sub batch {
     die if scalar(keys %procs);
 }
 
-sub for_repos {
-    for my $repo (@repos) {
-        $_->(@$repo) for @_;
+sub run {
+    my ($cmd) = @_;
+    note @_;
+    return 1 if $dryrun;
+
+    system(@_) == 0
+        or die "`$cmd´ returned $?";
+}
+
+sub spawn {
+    local $async = 1;
+    note @_;
+    return 1 if $dryrun;
+
+    if ($^O eq 'MSWin32') {
+        system 1, @_;
     }
+    else {
+        my $pid = fork // return -1;
+        return $pid if $pid;
+        exec @_;
+        die $!;
+    }
+}
+
+sub help {
+    my ($key, $value) = @_;
+    push @help, $key;
+    $help{$key} = $value;
 }
 
 sub target {
@@ -264,13 +261,92 @@ sub target {
     $targets{$name} = $action;
 }
 
-sub dispatch {
-    for (@_) {
-        die "unknown target `$_´"
-            unless exists $targets{$_};
+help 'pull'
+    => "update existing git repositories and create missing ones";
 
-        $targets{$_}->();
-    }
+help 'clobber'
+    => "git clean all repositories";
+
+help 'build'
+    => "build everything [DEFAULT]";
+
+help 'build-libuv'
+    => "build libuv as static library";
+
+help 'DRY_RUN'
+    => "merely log instead of execute commands";
+
+help 'QUIET'
+    => 'suppress logging output';
+
+help 'SYNC'
+    => "fully synchronous build";
+
+target '--help' => sub {
+    say "\n  Abandon all hope, ye who enter here.";
+    say "\nTARGETS\n";
+    say "  $_\n    ", ($help{$_} // ''), "\n"
+        for grep { exists $targets{$_} } @help;
+    say "\nENVIRONMENT FLAGS\n";
+    say "  $_\n    ", ($help{$_} // ''), "\n"
+        for grep { /DRY_RUN|QUIET|SYNC/ } @help;
+};
+
+target 'clobber' => sub {
+    for_repos sub {
+        my ($dir) = @_;
+        run 'git', '-C', $dir, 'clean', '-xdf';
+    };
+};
+
+target 'pull' => sub {
+    my @jflag = conflist('git.jflag');
+
+    for_repos sub {
+        my ($dir, $url) = @_;
+
+        enqueue -e $dir
+            ? ('git', '-C', $dir, 'pull', '--depth=1',
+                '--recurse-submodules', @jflag)
+            : ('git', 'clone', '--depth=1',
+                '--recurse-submodules', @jflag, $url, $dir);
+    };
+
+    batch;
+};
+
+{
+    my $target = shift(@ARGV) // 'build';
+    die "unknown target `$target´"
+        unless exists $targets{$target};
+
+    $targets{$target}->(@ARGV);
+}
+
+__END__
+sub needs_rebuild {
+    my ($dest, $mtime) = @_;
+    !-f $dest || mtime($dest) < $mtime;
+}
+
+sub reext {
+    my ($old, $new, @names) = @_;
+    s/\Q$old\E$/$new/ for @names;
+    @names;
+}
+
+sub spurt {
+    my $name = shift;
+
+    note 'spurt', $name;
+    return if $dryrun;
+
+    open my $fh, '>', $name or die $!;
+
+    syswrite $fh, $_ or die $!
+        for @_;
+
+    close $fh;
 }
 
 sub inc { map { conf('build.cc.flags.include') . $_ } @_ }
@@ -283,11 +359,7 @@ sub cc_co {
     conf('build.cc.flags.out');
 }
 
-sub help {
-    my ($key, $value) = @_;
-    push @help, $key;
-    $help{$key} = $value;
-}
+
 
 sub dirwalk {
     my ($dir, $sub) = @_;
@@ -384,69 +456,6 @@ sub gen {
 
     spurt $dest, @lines;
 }
-
-help 'pull'
-    => "update existing git repositories and create missing ones";
-
-help 'clobber'
-    => "git clean all repositories";
-
-help 'build'
-    => "build everything [DEFAULT]";
-
-help 'build-libuv'
-    => "build libuv as static library";
-
-help 'DRY_RUN'
-    => "merely log instead of execute commands";
-
-help 'QUIET'
-    => 'suppress logging output';
-
-help 'SYNC'
-    => "fully synchronous build";
-
-target '--help' => sub {
-    say "\n  Abandon all hope, ye who enter here.";
-    say "\nTARGETS\n";
-    say "  $_\n    ", ($help{$_} // ''), "\n"
-        for grep { exists $targets{$_} } @help;
-    say "\nENVIRONMENT FLAGS\n";
-    say "  $_\n    ", ($help{$_} // ''), "\n"
-        for grep { /DRY_RUN|QUIET|SYNC/ } @help;
-};
-
-target 'clobber' => sub {
-    for_repos sub {
-        my ($dir) = @_;
-        run 'git', '-C', $dir, 'clean', '-xdf';
-    };
-};
-
-target 'pull' => sub {
-    my %procs;
-
-    my @jflag = $config{'git.jflag'} // ();
-    for_repos sub {
-        my ($dir, $url) = @_;
-
-        my $pid = spawn -e $dir
-            ? ('git', '-C', $dir, 'pull', '--depth=1',
-                '--recurse-submodules', @jflag)
-            : ('git', 'clone', '--depth=1',
-                '--recurse-submodules', @jflag, $url, $dir);
-
-        die $! if $pid <= 0;
-        $procs{$pid} = undef;
-    };
-
-    while ((my $pid = wait) >= 0) {
-        die if !exists $procs{$pid} || $? != 0;
-        delete $procs{$pid};
-    }
-
-    die if %procs;
-};
 
 target 'build-libuv' => build 'moar.3rdparty.libuv', 'libuv-static';
 
