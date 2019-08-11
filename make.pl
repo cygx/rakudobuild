@@ -47,18 +47,18 @@ sub to_uint {
     0 + $_;
 }
 
-my sub conf {
+sub conf {
     my ($key) = @_;
     $config{$key} // die "missing config key `$key´"
 }
 
-my sub confopt  { $config{$_[0]} // '' }
-my sub confflag { $config{$_[0]} ? 1 : 0 }
+sub confopt  { $config{$_[0]} // '' }
+sub confflag { $config{$_[0]} ? 1 : 0 }
 
-my sub conf_u    { to_uint &conf }
-my sub confopt_u { to_uint &confopt }
+sub conf_u    { to_uint &conf }
+sub confopt_u { to_uint &confopt }
 
-my sub conflist {
+sub conflist {
     my @list;
     for (@config{@_}) {
         push @list, ref($_) eq 'ARRAY' ? @$_ : $_
@@ -210,67 +210,47 @@ sub spawn {
     }
 }
 
-sub await {
-    return 1 if $dryrun;
+my @queue;
 
-    my $procs = shift;
-    my $ok = 1;
-
-    while ((my $pid = wait) >= 0) {
-
-        # expected proc
-        if (exists $procs->{$pid}) {
-            $procs->{$pid} = $?;
-            $ok = 0 if $? != 0;
-        }
-
-        # unexpected proc
-        else {
-            $procs->{(-$pid)} = $?;
-            $ok = 0;
-        }
-    }
-
-    # check all expected procs are done
-    if ($ok) {
-        for (values %$procs) {
-            unless (defined) {
-                $ok = 0;
-                last;
-            }
-        }
-    }
-
-    $ok;
-}
-
-my @batch;
-
-sub done_batching {
-    my %procs;
-    my %cmds;
-
-    for (@batch) {
-        my $pid = spawn @$_;
-        die $! unless $pid > 0;
-        $procs{$pid} = undef;
-        $cmds{$pid} = $_;
-    }
-
-    await \%procs or die;
-    @batch = ();
+sub enqueue {
+    push @queue, \@_;
 }
 
 sub batch {
-    if ($batchsize < 2) {
-        run @_;
+    return unless @queue;
+
+    if ($batchsize < 2 || $dryrun) {
+        run @$_ for @queue;
+        @queue = ();
         return;
     }
 
-    push @batch, \@_;
-    return if @batch < $batchsize;
+    my %procs;
+    my %cmds;
 
-    done_batching;
+    LOOP: while (1) {
+        while (scalar(keys %procs) < $batchsize) {
+            my $cmd = shift @queue;
+            my $pid = spawn @$cmd;
+            die $! unless $pid > 0;
+            $procs{$pid} = undef;
+            $cmds{$pid} = $cmd;
+            last LOOP unless scalar(@queue);
+        }
+
+        my $pid = wait;
+        die if !exists $procs{$pid} || $? != 0;
+        delete $procs{$pid};
+        delete $cmds{$pid};
+    }
+
+    while ((my $pid = wait) >= 0) {
+        die if !exists $procs{$pid} || $? != 0;
+        delete $procs{$pid};
+        delete $cmds{$pid};
+    }
+
+    die if scalar(keys %procs);
 }
 
 sub for_repos {
@@ -375,13 +355,13 @@ sub build {
             my $src = $sources[$i];
             my $dest = $objects[$i];
 
-            if (needs_rebuild $dest) {
-                batch @cmd, $dest, $src;
+            if (needs_rebuild $dest, min mtime($src), $MTIME) {
+                enqueue @cmd, $dest, $src;
                 $compiled = 1;
             }
         }
 
-        done_batching;
+        batch;
     };
 }
 
@@ -460,14 +440,19 @@ target 'pull' => sub {
         $procs{$pid} = undef;
     };
 
-    await \%procs or die;
+    while ((my $pid = wait) >= 0) {
+        die if !exists $procs{$pid} || $? != 0;
+        delete $procs{$pid};
+    }
+
+    die if %procs;
 };
 
 target 'build-libuv' => build 'moar.3rdparty.libuv', 'libuv-static';
 
 target 'build' => sub {
     dispatch
-        confflag('moar.3rdparty.libuv.build') ? 'build-libuv' : ();
+        confflag('moar.3rdparty.libuv.global') ? () : 'build-libuv';
 };
 
 target 'moar-config' => sub {
@@ -479,7 +464,7 @@ target 'moar-config' => sub {
     }
 };
 
-#dispatch @ARGV ? @ARGV : 'build';
+dispatch @ARGV ? @ARGV : 'build';
 
 package oo {
     sub public {
@@ -494,7 +479,7 @@ package oo {
 package Builder {
     BEGIN { oo::public qw(name build) }
 
-    my sub toggle {
+    sub toggle {
         map { /^no-/ ? s/^no-//r : "no-$_"; } @_;
     }
 
@@ -502,11 +487,11 @@ package Builder {
         my (undef, $name, $node, @flags) = @_;
 
         my %builds;
-        @builds{conflist "$node.builds"} = ();
+        @builds{::conflist "$node.builds"} = ();
         @builds{map { "no-$_" } keys %builds} = ();
 
         my %current;
-        @current{conflist "$node.builds.default"} = ();
+        @current{::conflist "$node.builds.default"} = ();
 
         @flags = grep { exists $builds{$_} } @flags;
         delete @current{toggle @flags};
@@ -536,4 +521,4 @@ package Builder {
     }
 }
 
-say for Builder->new('libuv', 'moar.3rdparty.libuv')->objects('build.');
+#say for Builder->new('libuv', 'moar.3rdparty.libuv')->objects('build.');
