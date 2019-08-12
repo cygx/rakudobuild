@@ -4,6 +4,9 @@
 use v5.14;
 use warnings;
 
+use Digest::SHA1 qw(sha1_base64);
+use Time::HiRes qw(stat);
+
 our $LICENSE = <<'END_LICENSE';
 Boost Software License - Version 1.0 - August 17th, 2003
 
@@ -34,16 +37,16 @@ our $VERSION = '0.01';
 
 use subs qw(
     conf confopt confflag conf_u confopt_u conflist
-    mtime min to_uint note files mkparents reext
+    mtime min max to_uint note files mkparents reext
     with_file each_line with_dir each_file dirwalk for_repos
     enqueue batch run spawn spurt gen
-    includes headers sources objects
-    toggle buildspec inc cc_co ar_rcs
+    includes headers sources objects cache
+    toggle buildspec buildid inc cc_co ar_rcs
     dispatch help target
 );
 
 our $CONFFILE;
-our $MTIME;
+our $CONFTIME;
 our %CONF;
 our %MOARCONF;
 our @REPOS;
@@ -63,7 +66,7 @@ my @queue;
 
 INIT {
     $CONFFILE = 'BUILD.conf';
-    $MTIME = mtime $CONFFILE;
+    $CONFTIME = mtime $CONFFILE;
 
     with_file $CONFFILE, sub {
         while (<$fh>) {
@@ -153,6 +156,12 @@ sub min {
     my $min = shift;
     for (@_) { $min = $_ if $_ < $min }
     $min;
+}
+
+sub max {
+    my $max = shift;
+    for (@_) { $max = $_ if $_ > $max }
+    $max;
 }
 
 sub to_uint {
@@ -317,16 +326,9 @@ sub spawn {
 }
 
 sub spurt {
-    my $name = shift;
-
-    note 'spurt', $name;
-    return if $dryrun;
-
-    open my $fh, '>', $name or die $!;
-
-    syswrite $fh, $_ or die $!
-        for @_;
-
+    my $file = shift;
+    open my $fh, '>', $file or die $!;
+    syswrite $fh, $_ or die $! for @_;
     close $fh;
 }
 
@@ -347,7 +349,8 @@ sub gen {
         push @lines, $_;
     };
 
-    spurt $dest, @lines;
+    note '# GENERATING `$dest´ from `$src´';
+    spurt $dest, @lines unless $dryrun;
 }
 
 sub includes {
@@ -389,17 +392,22 @@ sub buildspec {
     my ($node, @flags) = @_;
 
     my %builds;
-    @builds{::conflist "$node.builds"} = ();
+    @builds{conflist "$node.builds"} = ();
     @builds{map { "no-$_" } keys %builds} = ();
 
     my %spec;
-    @spec{::conflist "$node.builds.default"} = ();
+    @spec{conflist "$node.builds.default"} = ();
 
     @flags = grep { exists $builds{$_} } @flags;
     delete @spec{toggle @flags};
     @spec{@flags} = ();
 
     sort keys %spec;
+}
+
+sub buildid {
+    my ($node, @spec) = @_;
+    join '-', $node =~ /(\w+)$/, grep { !/^no-/ } @spec;
 }
 
 sub inc { map { conf('build.cc.flags.include') . $_ } @_ }
@@ -509,48 +517,47 @@ target 'build' => sub {
 target 'build-libuv' => sub {
     my $node = 'moar.3rdparty.libuv';
     my @spec = buildspec $node, @_;
+    my $id = buildid $node, @spec;
+
+    note "# BUILDING `$id´";
 
     my @cflags;
     push @cflags, conflist("$node.build.$_.cc.flags") for @spec;
     push @cflags, inc includes $node;
 
-    my @cmd = cc_co @cflags;
-    say join ' ', @cmd;
-    say join ' ', ar_rcs;
+    my @cc_co = cc_co @cflags;
+    my @ar_rcs = ar_rcs;
+
+    my @sources = sources $node;
+    my @objects = objects $node, "BUILD.$id", @sources;
+    mkparents @objects unless $dryrun;
+
+    my @headers = headers $node;
+    my $hdrtime = max map { mtime $_ } @headers;
+
+    my %cache = cache "CACHE.$id";
+    for (my $i = 0; $i < @objects; ++$i) {
+        my $obj = $objects[$i];
+        my $src = $sources[$i];
+
+        my $objtime;
+        next if -f $obj
+             && ($objtime = mtime($obj)) > $CONFTIME
+             && $objtime > $hdrtime
+             && $objtime > mtime($src);
+
+        next if %cache
+             && 0;
+
+        enqueue @cc_co, $obj, $src;
+    }
+
+    batch;
 };
 
 dispatch @ARGV;
 
 __END__
-sub needs_rebuild {
-    my ($dest, $mtime) = @_;
-    !-f $dest || mtime($dest) < $mtime;
-}
-
-sub build {
-    my ($node, $id) = @_;
-    sub {
-        my @cmd = cc_co inc(includes $node);
-        my @sources = sources $node;
-        my @objects = objects $node, "build.$id", @sources;
-        mkparents @objects unless $dryrun;
-
-        my $compiled = 0;
-        for (my $i = 0; $i < @sources; ++$i) {
-            my $src = $sources[$i];
-            my $dest = $objects[$i];
-
-            if (needs_rebuild $dest, min mtime($src), $MTIME) {
-                enqueue @cmd, $dest, $src;
-                $compiled = 1;
-            }
-        }
-
-        batch;
-    };
-}
-
-
 target 'build' => sub {
     dispatch
         confflag('moar.3rdparty.libuv.global') ? () : 'build-libuv';
@@ -561,59 +568,6 @@ target 'moar-config' => sub {
         my $src = conf('moar.root')."/build/$file.in";
         my $dest = conf('moar.root')."/src/gen/$file";
         gen $dest, $src, \%moarconfig
-            if needs_rebuild $dest, min mtime($src), $MTIME;
+            if needs_rebuild $dest, min mtime($src), $CONFTIME;
     }
 };
-
-package oo {
-    sub public {
-        no strict 'refs';
-        my $pkg = caller;
-        for my $slot (@_) {
-            *{"${pkg}::${slot}"} = sub : lvalue { shift->{$slot} };
-        }
-    }
-}
-
-package Builder {
-    BEGIN { oo::public qw(name build) }
-
-    sub new {
-        my (undef, $name, $node, @flags) = @_;
-
-        my %builds;
-        @builds{::conflist "$node.builds"} = ();
-        @builds{map { "no-$_" } keys %builds} = ();
-
-        my %current;
-        @current{::conflist "$node.builds.default"} = ();
-
-        @flags = grep { exists $builds{$_} } @flags;
-        delete @current{toggle @flags};
-        @current{@flags} = ();
-
-        bless {
-            node => $node,
-            name => $name,
-            build => [ sort keys %current ],
-        };
-    }
-
-    sub id {
-        my $self = shift;
-        join '-', $self->name, grep { !/^no-/ } @{$self->build};
-    }
-
-    sub includes { ::includes shift->{node} }
-    sub headers { ::headers shift->{node} }
-    sub sources { ::sources shift->{node} }
-
-    sub objects {
-        my ($self, $prefix) = @_;
-        my $node = $self->{node};
-        my $id = $self->id;
-        ::objects $node, "$prefix$id", ::sources $node;
-    }
-}
-
-#say for Builder->new('libuv', 'moar.3rdparty.libuv')->objects('build.');
