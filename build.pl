@@ -123,7 +123,7 @@ INIT {
 
     $quiet = $ENV{QUIET} ? 1 : 0;
     $async = 0;
-    $batchsize = $ENV{SYNC} ? 0 : confopt_u 'make.async.degree';
+    $batchsize = $ENV{SYNC} ? 0 : confopt_u 'script.async.degree';
     $dryrun = $ENV{DRY_RUN} ? 1 : 0;
 }
 
@@ -483,7 +483,7 @@ target 'clobber' => sub {
 };
 
 target 'pull' => sub {
-    my @jflag = conflist('git.jflag');
+    my @jflag = conflist('git.flags.jobs');
 
     for_repos sub {
         my ($dir, $url) = @_;
