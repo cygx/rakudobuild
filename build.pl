@@ -37,10 +37,10 @@ our $VERSION = '0.01';
 
 use subs qw(
     conf confopt confflag conf_u confopt_u conflist
-    mtime min max to_uint note files mkparents reext
+    mtime min max to_uint note files mkparents reext rotor chomped
     with_file each_line with_dir each_file dirwalk for_repos
     enqueue batch run spawn spurt gen
-    includes headers sources objects cache
+    includes headers sources objects cache ccdigest
     toggle buildspec buildid inc cc_co ar_rcs
     dispatch help target
 );
@@ -167,7 +167,7 @@ sub max {
 sub to_uint {
     local $_ = shift;
     die "`$_´ cannot be converted to uint" if /\D/;
-    length ? 0 + $_ : 0;
+    length() ? 0 + $_ : 0;
 }
 
 sub note {
@@ -199,6 +199,26 @@ sub reext {
     my ($old, $new, @names) = @_;
     s/\Q$old\E$/$new/ for @names;
     @names;
+}
+
+sub rotor {
+    my ($n, $sub) = @_;
+    my @stack;
+    sub {
+        push @stack, $_;
+        if (@stack == $n) {
+            $sub->(@stack);
+            @stack = ();
+        }
+    };
+}
+
+sub chomped {
+    my ($sub) = @_;
+    sub {
+        chomp;
+        $sub->();
+    };
 }
 
 sub with_file {
@@ -384,6 +404,30 @@ sub objects {
         reext '.c', conf('build.suffix.obj'), @sources;
 }
 
+sub cache {
+    my ($file) = @_;
+    return unless -f $file;
+
+    my %cache;
+    with_file $file, each_line chomped rotor 3, sub {
+        my ($dest, @info) = @_;
+        $cache{$dest} = \@info;
+    };
+
+    %cache;
+}
+
+sub ccdigest {
+    die if $_[ 1] ne conf('build.cc.flags.compile')
+        || $_[-3] ne conf('build.cc.flags.out');
+
+    splice @_, 1, 1, conf('build.cc.flags.preprocess');
+    splice @_, -3, 2;
+
+    my $cmd = join ' ', map { '"' . s/"/\\"/rg . '"' } @_;
+    sha1_base64 `$cmd`;
+}
+
 sub toggle {
     map { /^no-/ ? s/^no-//r : "no-$_"; } @_;
 }
@@ -518,6 +562,7 @@ target 'build-libuv' => sub {
     my $node = 'moar.3rdparty.libuv';
     my @spec = buildspec $node, @_;
     my $id = buildid $node, @spec;
+    my $cachefile = "CACHE.$id";
 
     note "# BUILDING `$id´";
 
@@ -535,10 +580,11 @@ target 'build-libuv' => sub {
     my @headers = headers $node;
     my $hdrtime = max map { mtime $_ } @headers;
 
-    my %cache = cache "CACHE.$id";
+    my %cache = cache $cachefile;
     for (my $i = 0; $i < @objects; ++$i) {
         my $obj = $objects[$i];
         my $src = $sources[$i];
+        my @cmd = (@cc_co, $obj, $src);
 
         my $objtime;
         next if -f $obj
@@ -546,13 +592,22 @@ target 'build-libuv' => sub {
              && $objtime > $hdrtime
              && $objtime > mtime($src);
 
+        my $cmd = join "\0", @cmd;
+        my $digest = ccdigest @cmd;
         next if %cache
-             && 0;
-
-        enqueue @cc_co, $obj, $src;
+             && exists $cache{$obj}
+             && $cache{$obj}->[0] eq $cmd
+             && $cache{$obj}->[1] eq $digest;
+    
+        $cache{$obj} = [ $cmd, $digest ];
+        enqueue @cmd;
     }
 
+    unlink $cachefile;
     batch;
+
+    spurt $cachefile,
+        map { map { "$_\n" } $_, @{$cache{$_}} } sort keys %cache;
 };
 
 dispatch @ARGV;
