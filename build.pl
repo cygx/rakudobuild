@@ -38,7 +38,7 @@ use subs qw(
     with_file each_line with_dir each_file dirwalk for_repos
     enqueue batch run spawn spurt gen
     includes headers sources objects
-    toggle buildspec inc cc_co
+    toggle buildspec inc cc_co ar_rcs
     dispatch help target
 );
 
@@ -413,6 +413,10 @@ sub cc_co {
     conf('build.cc.flags.out');
 }
 
+sub ar_rcs {
+    conf('build.ar'), conflist('build.ar.flags.rcs'), @_;
+}
+
 sub dispatch {
     my ($target, @args) = @_;
     $target //= 'build';
@@ -512,7 +516,7 @@ target 'build-libuv' => sub {
 
     my @cmd = cc_co @cflags;
     say join ' ', @cmd;
-
+    say join ' ', ar_rcs;
 };
 
 dispatch @ARGV;
