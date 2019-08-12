@@ -436,14 +436,14 @@ sub target {
 help 'pull'
     => "update existing git repositories and create missing ones";
 
-help 'clobber'
-    => "git clean all repositories";
-
 help 'build'
-    => "build everything [default target]";
+    => "build everything [DEFAULT TARGET]";
 
 help 'build-libuv'
     => "build bundled copy of libuv as static library";
+
+help 'clobber'
+    => "git clean all repositories";
 
 help 'DRY_RUN'
     => "merely log instead of execute commands";
@@ -466,7 +466,7 @@ target '--help' => sub {
     say "  $_\n    ", ($help{$_} // ''), "\n"
         for grep { exists $targets{$_} && !/^--/ } @help;
 
-    say "\nENVIRONMENT FLAGS\n";
+    say "\nENVIRONMENT VARIABLES\n";
     say "  $_=1\n    ", ($help{$_} // ''), "\n"
         for grep { /DRY_RUN|QUIET|SYNC/ } @help;
 };
