@@ -62,7 +62,7 @@ my @help;
 my @queue;
 
 INIT {
-    $CONFFILE = 'build.conf';
+    $CONFFILE = 'BUILD.conf';
     $MTIME = mtime $CONFFILE;
 
     with_file $CONFFILE, sub {
@@ -443,7 +443,7 @@ help 'build'
     => "build everything [default target]";
 
 help 'build-libuv'
-    => "build libuv as static library";
+    => "build bundled copy of libuv as static library";
 
 help 'DRY_RUN'
     => "merely log instead of execute commands";
