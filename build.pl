@@ -7,7 +7,7 @@ use warnings;
 use Digest::SHA1 qw(sha1_base64);
 use Time::HiRes qw(stat);
 
-our $LICENSE = <<'END_LICENSE';
+my $LICENSE = <<'END_LICENSE';
 Boost Software License - Version 1.0 - August 17th, 2003
 
 Permission is hereby granted, free of charge, to any person or organization
@@ -33,7 +33,7 @@ ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 END_LICENSE
 
-our $VERSION = '0.01';
+my $VERSION = '0.01';
 
 use subs qw(
     conf confopt confflag conf_u confopt_u conflist
@@ -45,11 +45,15 @@ use subs qw(
     dispatch help target
 );
 
-our $CONFFILE;
-our $CONFTIME;
-our %CONF;
-our %MOARCONF;
-our @REPOS;
+my $CONFFILE = 'BUILD.conf';
+my $CONFTIME = mtime $CONFFILE;
+
+my %CONF;
+my %MOARCONF;
+my @REPOS;
+
+my @FLAGS  = qw(QUIET SYNC DRY_RUN FORCE_BUILD LOG_CALLS);
+my $FLAGRX = qr/QUIET|SYNC|DRY_RUN|FORCE_BUILD|LOG_CALLS/;
 
 our $fh;
 our $dh;
@@ -64,70 +68,75 @@ my %help;
 my @help;
 my @queue;
 
-INIT {
-    $CONFFILE = 'BUILD.conf';
-    $CONFTIME = mtime $CONFFILE;
+with_file $CONFFILE, sub {
+    while (<$fh>) {
+        s/^\s+|\s+$//g;
+        next if length == 0 || /^#/;
 
-    with_file $CONFFILE, sub {
-        while (<$fh>) {
-            s/^\s+|\s+$//g;
-            next if length == 0 || /^#/;
-
-            my ($key, $value) = split /\s+/, $_, 2;
-            if ($key =~ s/\[\]$//) {
-                push @{$CONF{$key}}, $value;
-            }
-            else {
-                $CONF{$key} = $value;
-            }
+        my ($key, $value) = split /\s+/, $_, 2;
+        if ($key =~ s/\[\]$//) {
+            push @{$CONF{$key}}, $value;
         }
-    };
-
-    %MOARCONF = (
-        be  => confflag('arch.endian.big'),
-        static_inline => conf('lang.c.specifier.static_inline'),
-        version => conf('moar.version'),
-        versionmajor => conf('moar.version.major'),
-        versionminor => conf('moar.version.minor'),
-        versionpatch => conf('moar.version.patch'),
-        noreturnspecifier => confopt('lang.c.specifier.noreturn'),
-        noreturnattribute => confopt('lanc.c.attribute.noreturn'),
-        formatattribute => confopt('lang.c.attribute.format'),
-        dllimport => confopt('lang.c.specifier.dll.import'),
-        dllexport => confopt('lang.c.specifier.dll.export'),
-        dlllocal => confopt('lang.c.attribute.dll.local'),
-        has_pthread_yield => confflag('lib.c.pthread.yield'),
-        has_fn_malloc_trim => confflag('lib.c.std.malloc_trim'),
-        can_unaligned_int32 => confflag('lang.c.feature.unaligned.i32'),
-        can_unaligned_int64 => confflag('lang.c.feature.unaligned.i64'),
-        can_unaligned_num32 => confflag('lang.c.feature.unaligned.f32'),
-        can_unaligned_num64 => confflag('lang.c.feature.unaligned.f64'),
-        ptr_size => conf_u('arch.pointer.size'),
-        havebooltype => confflag('lang.c.feature.bool'),
-        booltype => conf('lang.c.type.bool'),
-        translate_newline_output => confflag('os.io.translate_newlines'),
-        jit_arch => conf('moar.jit.arch'),
-        jit_platform => conf('moar.jit.platform'),
-        vectorizerspecifier => confopt('lang.c.pragma.vectorize_loop'),
-        expect_likely => confopt('lang.c.builtin.expect.likely'),
-        expect_unlikely => confopt('lang.c.builtin.expect.unlikely'),
-        expect_condition => confopt('lang.c.builtin.expect'),
-        backendconfig => '/* FIXME */',
-    );
-
-    {
-        my @repos = conflist('git.repos');
-        while (@repos) {
-            my $dir = shift @repos;
-            my $url = shift @repos;
-            push @REPOS, [ $dir, $url ];
+        else {
+            $CONF{$key} = $value;
         }
     }
+};
 
-    $quiet = $ENV{QUIET} ? 1 : 0;
+%MOARCONF = (
+    be  => confflag('arch.endian.big'),
+    static_inline => conf('lang.c.specifier.static_inline'),
+    version => conf('moar.version'),
+    versionmajor => conf('moar.version.major'),
+    versionminor => conf('moar.version.minor'),
+    versionpatch => conf('moar.version.patch'),
+    noreturnspecifier => confopt('lang.c.specifier.noreturn'),
+    noreturnattribute => confopt('lanc.c.attribute.noreturn'),
+    formatattribute => confopt('lang.c.attribute.format'),
+    dllimport => confopt('lang.c.specifier.dll.import'),
+    dllexport => confopt('lang.c.specifier.dll.export'),
+    dlllocal => confopt('lang.c.attribute.dll.local'),
+    has_pthread_yield => confflag('lib.c.pthread.yield'),
+    has_fn_malloc_trim => confflag('lib.c.std.malloc_trim'),
+    can_unaligned_int32 => confflag('lang.c.feature.unaligned.i32'),
+    can_unaligned_int64 => confflag('lang.c.feature.unaligned.i64'),
+    can_unaligned_num32 => confflag('lang.c.feature.unaligned.f32'),
+    can_unaligned_num64 => confflag('lang.c.feature.unaligned.f64'),
+    ptr_size => conf_u('arch.pointer.size'),
+    havebooltype => confflag('lang.c.feature.bool'),
+    booltype => conf('lang.c.type.bool'),
+    translate_newline_output => confflag('os.io.translate_newlines'),
+    jit_arch => conf('moar.jit.arch'),
+    jit_platform => conf('moar.jit.platform'),
+    vectorizerspecifier => confopt('lang.c.pragma.vectorize_loop'),
+    expect_likely => confopt('lang.c.builtin.expect.likely'),
+    expect_unlikely => confopt('lang.c.builtin.expect.unlikely'),
+    expect_condition => confopt('lang.c.builtin.expect'),
+    backendconfig => '/* FIXME */',
+);
+
+{
+    my @repos = conflist('git.repos');
+    while (@repos) {
+        my $dir = shift @repos;
+        my $url = shift @repos;
+        push @REPOS, [ $dir, $url ];
+    }
+}
+
+{
+    my %flags;
+    @flags{@FLAGS} = @ENV{@FLAGS};
+
+    my @argflags = grep {  /^(?:$FLAGRX)=/ } @ARGV;
+           @ARGV = grep { !/^(?:$FLAGRX)=/ } @ARGV;
+
+    @flags{map { s/=.*$//r } @argflags} = map { s/^.*?=//r } @argflags;
+
+    $quiet = $flags{QUIET} ? 1 : 0;
     $async = 0;
-    $batchsize = $ENV{SYNC} ? 0 : confopt_u 'script.async.degree';
-    $dryrun = $ENV{DRY_RUN} ? 1 : 0;
+    $batchsize = $flags{SYNC} ? 0 : confopt_u('script.async.degree');
+    $dryrun = $flags{DRY_RUN} ? 1 : 0;
 }
 
 sub conf {
@@ -524,7 +533,7 @@ target '--help' => sub {
 
     say "\nENVIRONMENT VARIABLES\n";
     say "  $_=1\n    ", ($help{$_} // ''), "\n"
-        for grep { /DRY_RUN|QUIET|SYNC/ } @help;
+        for grep { /^(?:$FLAGRX)$/ } @help;
 };
 
 target '--version' => sub { say $VERSION };
@@ -580,7 +589,10 @@ target 'build-libuv' => sub {
     my @headers = headers $node;
     my $hdrtime = max map { mtime $_ } @headers;
 
-    my %cache = cache $cachefile;
+    my %cache = cache $cachefile
+        unless $dryrun;
+
+
     for (my $i = 0; $i < @objects; ++$i) {
         my $obj = $objects[$i];
         my $src = $sources[$i];
@@ -592,22 +604,28 @@ target 'build-libuv' => sub {
              && $objtime > $hdrtime
              && $objtime > mtime($src);
 
-        my $cmd = join "\0", @cmd;
-        my $digest = ccdigest @cmd;
-        next if %cache
-             && exists $cache{$obj}
-             && $cache{$obj}->[0] eq $cmd
-             && $cache{$obj}->[1] eq $digest;
-    
-        $cache{$obj} = [ $cmd, $digest ];
+        unless ($dryrun) {
+            my $cmd = join "\0", @cmd;
+            my $digest = ccdigest @cmd;
+            next if %cache
+                 && exists $cache{$obj}
+                 && $cache{$obj}->[0] eq $cmd
+                 && $cache{$obj}->[1] eq $digest;
+        
+            $cache{$obj} = [ $cmd, $digest ];
+        }
+
         enqueue @cmd;
     }
 
-    unlink $cachefile;
+    unlink $cachefile
+        unless $dryrun;
+
     batch;
 
     spurt $cachefile,
-        map { map { "$_\n" } $_, @{$cache{$_}} } sort keys %cache;
+        map { map { "$_\n" } $_, @{$cache{$_}} } sort keys %cache
+            unless $dryrun;
 };
 
 dispatch @ARGV;
