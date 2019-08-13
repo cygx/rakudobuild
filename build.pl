@@ -62,6 +62,7 @@ our $quiet;
 our $async;
 our $batchsize;
 our $dryrun;
+our $force;
 
 my %targets;
 my %help;
@@ -137,6 +138,7 @@ with_file $CONFFILE, sub {
     $async = 0;
     $batchsize = $flags{SYNC} ? 0 : confopt_u('script.async.degree');
     $dryrun = $flags{DRY_RUN} ? 1 : 0;
+    $force = $flags{FORCE_BUILD} ? 1 : 0;
 }
 
 sub conf {
@@ -519,6 +521,9 @@ help 'QUIET'
 help 'SYNC'
     => "fully synchronous build";
 
+help 'FORCE_BUILD'
+    => "always rebuild";
+
 target '--help' => sub {
     say "\n  Abandon all hope, ye who enter here.";
 
@@ -599,7 +604,8 @@ target 'build-libuv' => sub {
         my @cmd = (@cc_co, $obj, $src);
 
         my $objtime;
-        next if -f $obj
+        next if !$force
+             && -f $obj
              && ($objtime = mtime($obj)) > $CONFTIME
              && $objtime > $hdrtime
              && $objtime > mtime($src);
@@ -607,7 +613,8 @@ target 'build-libuv' => sub {
         unless ($dryrun) {
             my $cmd = join "\0", @cmd;
             my $digest = ccdigest @cmd;
-            next if %cache
+            next if !$force
+                 && %cache
                  && exists $cache{$obj}
                  && $cache{$obj}->[0] eq $cmd
                  && $cache{$obj}->[1] eq $digest;
