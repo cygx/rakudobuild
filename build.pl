@@ -436,7 +436,9 @@ sub ccdigest {
     splice @_, -3, 2;
 
     my $cmd = join ' ', map { '"' . s/"/\\"/rg . '"' } @_;
-    sha1_base64 `$cmd`;
+    my $out = `$cmd`;
+    die unless $? == 0;
+    sha1_base64 $out;
 }
 
 sub toggle {
