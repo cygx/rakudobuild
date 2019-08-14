@@ -45,7 +45,7 @@ use subs qw(
     dispatch help target
 );
 
-my $CONFFILE = 'BUILD.conf';
+my $CONFFILE = 'CONFIG.status';
 my $CONFTIME = mtime $CONFFILE;
 
 my %CONF;
