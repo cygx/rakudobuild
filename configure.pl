@@ -22,12 +22,11 @@ DONE
 }
 
 my (undef, $cc) = @ARGV;
+my %tools = (cpp => \&cpp, cc => \&cc);
 
-probe \&cpp, 'kernel';
-probe \&cpp, 'distro';
-probe \&cc, 'ptrsize';
-
-exit;
+probe 'cpp.kernel';
+probe 'cpp.distro';
+probe 'cc.ptrsize';
 
 sub capture_tail {
     open my $proc, '-|', @_;
@@ -56,7 +55,8 @@ sub cc {
 }
 
 sub probe {
-    my ($tool, $key) = @_;
+    my $key = shift;
     say "probing $key...";
-    printf "  %s\n\n", $tool->($key);
+    my ($tool) = $key =~ /^(\w+)/;
+    printf "  %s\n\n", $tools{$tool}->($key);
 }
