@@ -1,4 +1,5 @@
 /*
+!/probes
 !.gitignore
-!make.pl
-!build.conf
+!CONFIG.status
+!*.pl
