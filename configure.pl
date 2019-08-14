@@ -56,7 +56,7 @@ sub cc {
 
 sub probe {
     my $key = shift;
-    say "probing $key...";
-    my ($tool) = $key =~ /^(\w+)/;
+    my ($tool, $name) = $key =~ /^(\w+)\.(\w+)$/;
+    say "probing $name...";
     printf "  %s\n\n", $tools{$tool}->($key);
 }
