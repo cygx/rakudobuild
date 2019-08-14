@@ -6,12 +6,22 @@ use warnings;
 
 use subs qw(probe);
 
-if (@ARGV != 1 || $ARGV[0] eq '--help') {
-    say "\n  USAGE\n\n    perl configure-with-cc.pl <compiler>";
-    exit;
+if (@ARGV != 2 || (@ARGV == 1 && not $ARGV[0] =~ /^--c[cl]$/)) {
+    print <<'DONE';
+
+  USAGE
+  
+      perl configure.pl --cc <COMPILER>
+      perl configure.pl --cl <COMPILER>
+
+    use --cc if your compiler is POSIX-like
+    use --cl if your compiler is MSVC-like
+    
+DONE
+    exit @ARGV == 1 && $ARGV[0] eq '--help' ? 0 : 1;
 }
 
-my $cc = shift;
+my (undef, $cc) = @ARGV;
 
 probe \&cpp, 'kernel';
 probe \&cpp, 'distro';
