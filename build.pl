@@ -556,7 +556,7 @@ sub compile {
 
 sub nolib {
     my ($node, $name, $id, @spec) = @_;
-    not -f "BUILD.$id/$name.a";
+    $force || not -f "BUILD.$id/$name.a";
 }
 
 sub linkit {
