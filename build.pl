@@ -561,8 +561,7 @@ target 'pull' => sub {
         my ($dir, $url) = @_;
 
         enqueue -e $dir
-            ? ('git', '-C', $dir, 'pull', '--depth=1',
-                '--recurse-submodules', @jflag)
+            ? ('git', '-C', $dir, 'pull', '--recurse-submodules', @jflag)
             : ('git', 'clone', '--depth=1',
                 '--recurse-submodules', @jflag, $url, $dir);
     };
