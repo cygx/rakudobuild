@@ -37,7 +37,7 @@ my $VERSION = '0.01';
 
 use subs qw(
     conf confopt confflag conf_u confopt_u conflist
-    mtime min max to_uint note files mkparents reext rotor chomped
+    mtime touch min max to_uint note files mkparents reext rotor chomped
     with_file each_line with_dir each_file dirwalk for_repos
     enqueue batch run spawn spurt gen
     includes headers sources objects cache ccdigest
@@ -162,6 +162,7 @@ sub conflist {
 }
 
 sub mtime { (stat shift)[9] }
+sub touch { utime undef, undef, shift }
 
 sub min {
     my $min = shift;
@@ -614,11 +615,14 @@ target 'build-libuv' => sub {
         unless ($dryrun) {
             my $cmd = join "\0", @cmd;
             my $digest = ccdigest @cmd;
-            next if !$force
-                 && %cache
-                 && exists $cache{$obj}
-                 && $cache{$obj}->[0] eq $cmd
-                 && $cache{$obj}->[1] eq $digest;
+            if (!$force
+                && %cache
+                && exists $cache{$obj}
+                && $cache{$obj}->[0] eq $cmd
+                && $cache{$obj}->[1] eq $digest) {
+                touch $obj;
+                next;
+            }
         
             $cache{$obj} = [ $cmd, $digest ];
         }
