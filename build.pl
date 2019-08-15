@@ -41,7 +41,8 @@ use subs qw(
     with_file each_line with_dir each_file dirwalk for_repos
     enqueue batch run spawn spurt gen
     includes headers sources objects cache ccdigest
-    toggle buildspec buildid inc cc_co ar_rcs build
+    toggle buildspec buildargs inc cc_co ar_rcs
+    compile nolib linkit build
     dispatch help target
 );
 
@@ -463,9 +464,12 @@ sub buildspec {
     sort keys %spec;
 }
 
-sub buildid {
-    my ($node, @spec) = @_;
-    join '-', $node =~ /(\w+)$/, grep { !/^no-/ } @spec;
+sub buildargs {
+    my ($node, @flags) = @_;
+    my ($name) = $node =~ /(\w+)$/;
+    my @spec = buildspec @_;
+    my $id = join '-', $name, grep { !/^no-/ } @spec;
+    $node, $name, $id, @spec;
 }
 
 sub inc { map { conf('build.cc.flags.include') . $_ } @_ }
@@ -483,13 +487,11 @@ sub ar_rcs {
     conf('build.ar'), conflist('build.ar.flags.rcs'), @_;
 }
 
-sub build {
-    my $node = shift;
-    my @spec = buildspec $node, @_;
-    my $id = buildid $node, @spec;
+sub compile {
+    my ($node, $name, $id, @spec) = @_;
     my $cachefile = "CACHE.$id";
 
-    note "# BUILDING `$id´";
+    note "# COMPILING `$id´";
 
     my @cflags;
     push @cflags, conflist("$node.build.$_.cc.flags") for @spec;
@@ -507,7 +509,6 @@ sub build {
 
     my %cache = cache $cachefile
         unless $dryrun;
-
 
     for (my $i = 0; $i < @objects; ++$i) {
         my $obj = $objects[$i];
@@ -539,6 +540,8 @@ sub build {
         enqueue @cmd;
     }
 
+    my $compiling = @queue > 0;
+
     unlink $cachefile
         unless $dryrun;
 
@@ -547,6 +550,26 @@ sub build {
     spurt $cachefile,
         map { map { "$_\n" } $_, @{$cache{$_}} } sort keys %cache
             unless $dryrun;
+
+    $compiling;
+}
+
+sub nolib {
+    my ($node, $name, $id, @spec) = @_;
+    not -f "BUILD.$id/$name.a";
+}
+
+sub linkit {
+    my ($node, $name, $id, @spec) = @_;
+    say join ' ', ar_rcs("BUILD.$id/$name.a", '?');
+}
+
+sub build {
+    my $node = shift;
+    sub {
+        @_ = buildargs $node, @_;
+        (&compile or &nolib) and &linkit;
+    }
 }
 
 sub dispatch {
@@ -640,13 +663,9 @@ target 'build' => sub {
     say 'TODO';
 };
 
-target 'build-libuv' => sub {
-    build 'moar.3rdparty.libuv';
-};
+target 'build-libuv' => build 'moar.3rdparty.libuv';;
 
-target 'build-libtommath' => sub {
-    build 'moar.3rdparty.libtommath';
-};
+target 'build-libtommath' => build 'moar.3rdparty.libtommath';
 
 dispatch @ARGV;
 
