@@ -41,7 +41,7 @@ use subs qw(
     with_file each_line with_dir each_file dirwalk for_repos
     enqueue batch run spawn spurt gen
     includes headers sources objects cache ccdigest
-    toggle buildspec buildid inc cc_co ar_rcs
+    toggle buildspec buildid inc cc_co ar_rcs build
     dispatch help target
 );
 
@@ -483,6 +483,72 @@ sub ar_rcs {
     conf('build.ar'), conflist('build.ar.flags.rcs'), @_;
 }
 
+sub build {
+    my $node = shift;
+    my @spec = buildspec $node, @_;
+    my $id = buildid $node, @spec;
+    my $cachefile = "CACHE.$id";
+
+    note "# BUILDING `$id´";
+
+    my @cflags;
+    push @cflags, conflist("$node.build.$_.cc.flags") for @spec;
+    push @cflags, inc includes $node;
+
+    my @cc_co = cc_co @cflags;
+    my @ar_rcs = ar_rcs;
+
+    my @sources = sources $node;
+    my @objects = objects $node, "BUILD.$id", @sources;
+    mkparents @objects unless $dryrun;
+
+    my @headers = headers $node;
+    my $hdrtime = max map { mtime $_ } @headers;
+
+    my %cache = cache $cachefile
+        unless $dryrun;
+
+
+    for (my $i = 0; $i < @objects; ++$i) {
+        my $obj = $objects[$i];
+        my $src = $sources[$i];
+        my @cmd = (@cc_co, $obj, $src);
+
+        my $objtime;
+        next if !$force
+             && -f $obj
+             && ($objtime = mtime($obj)) > $CONFTIME
+             && $objtime > $hdrtime
+             && $objtime > mtime($src);
+
+        unless ($dryrun) {
+            my $cmd = join "\0", @cmd;
+            my $digest = ccdigest @cmd;
+            if (!$force
+                && %cache
+                && exists $cache{$obj}
+                && $cache{$obj}->[0] eq $cmd
+                && $cache{$obj}->[1] eq $digest) {
+                touch $obj;
+                next;
+            }
+
+            $cache{$obj} = [ $cmd, $digest ];
+        }
+
+        enqueue @cmd;
+    }
+
+    unlink $cachefile
+        unless $dryrun;
+
+    batch;
+
+    spurt $cachefile,
+        map { map { "$_\n" } $_, @{$cache{$_}} } sort keys %cache
+            unless $dryrun;
+}
+
 sub dispatch {
     my ($target, @args) = @_;
     $target //= 'build';
@@ -575,69 +641,11 @@ target 'build' => sub {
 };
 
 target 'build-libuv' => sub {
-    my $node = 'moar.3rdparty.libuv';
-    my @spec = buildspec $node, @_;
-    my $id = buildid $node, @spec;
-    my $cachefile = "CACHE.$id";
+    build 'moar.3rdparty.libuv';
+};
 
-    note "# BUILDING `$id´";
-
-    my @cflags;
-    push @cflags, conflist("$node.build.$_.cc.flags") for @spec;
-    push @cflags, inc includes $node;
-
-    my @cc_co = cc_co @cflags;
-    my @ar_rcs = ar_rcs;
-
-    my @sources = sources $node;
-    my @objects = objects $node, "BUILD.$id", @sources;
-    mkparents @objects unless $dryrun;
-
-    my @headers = headers $node;
-    my $hdrtime = max map { mtime $_ } @headers;
-
-    my %cache = cache $cachefile
-        unless $dryrun;
-
-
-    for (my $i = 0; $i < @objects; ++$i) {
-        my $obj = $objects[$i];
-        my $src = $sources[$i];
-        my @cmd = (@cc_co, $obj, $src);
-
-        my $objtime;
-        next if !$force
-             && -f $obj
-             && ($objtime = mtime($obj)) > $CONFTIME
-             && $objtime > $hdrtime
-             && $objtime > mtime($src);
-
-        unless ($dryrun) {
-            my $cmd = join "\0", @cmd;
-            my $digest = ccdigest @cmd;
-            if (!$force
-                && %cache
-                && exists $cache{$obj}
-                && $cache{$obj}->[0] eq $cmd
-                && $cache{$obj}->[1] eq $digest) {
-                touch $obj;
-                next;
-            }
-        
-            $cache{$obj} = [ $cmd, $digest ];
-        }
-
-        enqueue @cmd;
-    }
-
-    unlink $cachefile
-        unless $dryrun;
-
-    batch;
-
-    spurt $cachefile,
-        map { map { "$_\n" } $_, @{$cache{$_}} } sort keys %cache
-            unless $dryrun;
+target 'build-libtommath' => sub {
+    build 'moar.3rdparty.libtommath';
 };
 
 dispatch @ARGV;

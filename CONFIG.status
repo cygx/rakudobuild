@@ -118,6 +118,20 @@ moar.3rdparty.libuv.src[] win/*.c
 moar.3rdparty.libuv.include[] include
 moar.3rdparty.libuv.include[] src
 
+moar.3rdparty.libtommath.builds.default[] optimize
+moar.3rdparty.libtommath.builds.default[] no-debug
+moar.3rdparty.libtommath.builds[] optimize
+moar.3rdparty.libtommath.builds[] debug
+moar.3rdparty.libtommath.build.optimize.cc.flags -O3
+moar.3rdparty.libtommath.build.no-optimize.cc.flags -O0
+moar.3rdparty.libtommath.build.debug.cc.flags -g3
+moar.3rdparty.libtommath.build.no-debug.cc.flags -DNDEBUG
+
+moar.3rdparty.libtommath.root moar/3rdparty/libtommath
+moar.3rdparty.libtommath.src.base .
+moar.3rdparty.libtommath.src *.c
+moar.3rdparty.libtommath.include .
+
 moar.use.syslib[] shell32
 moar.use.syslib[] ws2_32
 moar.use.syslib[] mswsock
