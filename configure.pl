@@ -6,7 +6,7 @@ use warnings;
 
 use subs qw(probe);
 
-if (@ARGV != 2 || (@ARGV == 1 && not $ARGV[0] =~ /^--c[cl]$/)) {
+if (@ARGV != 2 || not $ARGV[0] =~ /^--c[cl]$/) {
     print <<'DONE';
 
   USAGE
@@ -29,7 +29,10 @@ probe 'cpp.distro';
 probe 'cc.ptrsize';
 
 sub capture_tail {
-    open my $proc, '-|', @_;
+    my $cmd = join ' ', map { '"' . s/"/\\"/rg . '"' } @_;
+    open my $proc, '-|', $cmd;
+    #open my $proc, '-|', @_;
+
     my $line;
     while (<$proc>) {
         $line = $_ if /\S/;
