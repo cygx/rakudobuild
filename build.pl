@@ -514,9 +514,9 @@ sub build {
         my $src = $sources[$i];
         my @cmd = (@cc_co, $obj, $src);
 
-        my $objtime;
+        my ($exists, $objtime);
         next if !$force
-             && -f $obj
+             && ($exists = -f $obj)
              && ($objtime = mtime($obj)) > $CONFTIME
              && $objtime > $hdrtime
              && $objtime > mtime($src);
@@ -525,7 +525,7 @@ sub build {
             my $cmd = join "\0", @cmd;
             my $digest = ccdigest @cmd;
             if (!$force
-                && %cache
+                && $exists
                 && exists $cache{$obj}
                 && $cache{$obj}->[0] eq $cmd
                 && $cache{$obj}->[1] eq $digest) {
